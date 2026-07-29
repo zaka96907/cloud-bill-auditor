@@ -193,3 +193,10 @@ if df is not None:
                     
                 except Exception as e:
                     st.error(f"{t['error_gemini']} {e}")
+                    # --- قسم الخدمات المدفوعة للشركات ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("💼 خدمات الشركات والأعمال (B2B)")
+st.sidebar.info(
+    "هل تريد تحليلاً شاملاً وتوفير تكاليف السحاب لشركتك؟"
+)
+st.sidebar.markdown("📧 **لطلب خدمة مخصصة:**\nتواصل معنا عبر البريد الإكتروني مباشرة.")

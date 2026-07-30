@@ -87,9 +87,7 @@ t = texts[lang]
 # ---------------------------------------------------------
 with st.sidebar:
     st.title(t["sidebar_title"])
-    api_key = st.text_input(t["api_label"], type="password")
-    st.markdown(f"[{t['api_link']}](https://aistudio.google.com/app/apikey)")
-
+    api_key = st.secrets.get("GEMINI_API_KEY", "")
 # ---------------------------------------------------------
 # الواجهة الرئيسية
 # ---------------------------------------------------------

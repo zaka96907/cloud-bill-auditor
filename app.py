@@ -23,7 +23,8 @@ def generate_pdf_report(analysis_text):
     clean_text = analysis_text.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 8, txt=clean_text)
     
-    return pdf.output(dest='S').encode('latin-1')
+    # ارجاع البيانات مباشرة بدون encode إضافي
+    return bytes(pdf.output())
 
 # ---------------------------------------------------------
 # إعداد قائمة اختيار اللغة في الشريط الجانبي أولاً

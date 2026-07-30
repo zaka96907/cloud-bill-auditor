@@ -11,19 +11,19 @@ import io
 def generate_pdf_report(analysis_text):
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Helvetica", size=12)
     
     # Header
     pdf.set_font("Helvetica", style="B", size=16)
-    pdf.cell(200, 10, txt="Cloud Bill Audit Report", ln=1, align="C")
+    pdf.cell(0, 10, txt="Cloud Bill Audit Report", ln=1, align="C")
     pdf.ln(10)
     
     # Body Content
     pdf.set_font("Helvetica", size=10)
-    clean_text = analysis_text.encode('latin-1', 'replace').decode('latin-1')
-    pdf.multi_cell(0, 8, txt=clean_text)
     
-    # ارجاع البيانات مباشرة بدون encode إضافي
+    # تنظيف النص وتصفية أي أحرف غير لاتينية
+    clean_text = analysis_text.encode('latin-1', 'ignore').decode('latin-1')
+    pdf.multi_cell(0, 6, txt=clean_text)
+    
     return bytes(pdf.output())
 
 # ---------------------------------------------------------

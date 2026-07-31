@@ -36,33 +36,40 @@ def process_csv_with_pandas(df):
         return None
 
 # ---------------------------------------------------------
-# Goal 2: محرك القواعد البرمجية (FinOps Rule Engine)
+# Goal 2: محرك القواعد البرمجية مع دعم اللغتين (Fix Language Issue)
 # ---------------------------------------------------------
-def apply_finops_rules(df):
+def apply_finops_rules(df, lang="English"):
     flags = []
-    
-    # دمج كامل النص في كل سطر للبحث عن الكلمات المفتاحية
     df_str = df.astype(str).apply(lambda x: ' '.join(x), axis=1).str.lower()
     
-    # قاعدة 1: كشف الموارد المتروكة أو غير المستغلة (Idle / Unused Resources)
+    # القاعدة 1: كشف الموارد المتروكة
     idle_mask = df_str.str.contains('unused|idle|unattached|orphan|stopped', na=False)
     if idle_mask.any():
         idle_count = idle_mask.sum()
-        flags.append(f"⚠️ تم كشف {idle_count} من الموارد المتروكة أو غير المستغلة (Unused/Idle Resources).")
+        if lang == "العربية":
+            flags.append(f"⚠️ تم كشف {idle_count} من الموارد المتروكة أو غير المستغلة (Unused/Idle Resources).")
+        else:
+            flags.append(f"⚠️ Detected {idle_count} unused or idle resources (Unused/Idle Resources).")
 
-    # قاعدة 2: كشف أنواع التخزين ذات التكلفة المرتفعة بدون استخدام
+    # القاعدة 2: كشف النسخ الاحتياطية
     storage_mask = df_str.str.contains('storage|snapshot|backup', na=False)
     if storage_mask.any():
-        flags.append("ℹ️ توجد تكاليف متكررة للنسخ الاحتياطية والتخزين (Storage/Snapshots) قد تحتاج لمراجعة سياسة الاحتفاظ.")
+        if lang == "العربية":
+            flags.append("ℹ️ توجد تكاليف متكررة للنسخ الاحتياطية والتخزين قد تحتاج لمراجعة سياسة الاحتفاظ.")
+        else:
+            flags.append("ℹ️ Recurring storage/snapshot costs detected. Consider reviewing retention policies.")
 
-    # قاعدة 3: كشف الخدمات التي تستهلك أكثر من 40% من إجمالي الفاتورة
+    # القاعدة 3: كشف تركز التكلفة أكثر من 40%
     summary = process_csv_with_pandas(df)
     if summary and summary['total_spend'] > 0:
         for item in summary['top_services']:
             service_cost = list(item.values())[1] if len(item.values()) > 1 else 0
             if (service_cost / summary['total_spend']) >= 0.4:
                 service_name = list(item.values())[0]
-                flags.append(f"🚨 تنبيه تركز التكلفة: الخدمة ({service_name}) تستهلك وحدهـا أكثر من 40% من إجمالي الفاتورة!")
+                if lang == "العربية":
+                    flags.append(f"🚨 تنبيه تركز التكلفة: الخدمة ({service_name}) تستهلك وحدها أكثر من 40% من إجمالي الفاتورة!")
+                else:
+                    flags.append(f"🚨 Cost Concentration Alert: Service ({service_name}) accounts for over 40% of the total bill!")
 
     return flags
 
@@ -114,7 +121,8 @@ texts = {
         "pdf_button": "📄 تحميل تقرير PDF الاحترافي",
         "b2b_header": "💼 خدمات الشركات والأعمال (B2B)",
         "b2b_text": "هل تريد تخفيضاً أكبر في تكاليف السحاب؟ يتوفر فريقنا المتخصص لتقديم استشارات وتدقيق شامل لشركتك.",
-        "b2b_contact": "📩 للتواصل وحجز جلسة تدقيق:"
+        "b2b_contact": "📩 للتواصل وحجز جلسة تدقيق:",
+        "error_503": "السيرفر يعاني من ضغط حالياً، يرجى الضغط على زر التحليل مرة أخرى بعد بضع ثوانٍ."
     },
     "English": {
         "dir": "ltr",
@@ -135,7 +143,8 @@ texts = {
         "pdf_button": "📄 Download Professional PDF Report",
         "b2b_header": "💼 B2B & Enterprise Services",
         "b2b_text": "Need deeper cloud cost reduction? Our expert team provides end-to-end cloud audit consulting.",
-        "b2b_contact": "📩 Contact us for an audit session:"
+        "b2b_contact": "📩 Contact us for an audit session:",
+        "error_503": "Google API is currently experiencing high demand. Please click Analyze again in a few seconds."
     }
 }
 
@@ -180,21 +189,17 @@ if df is not None:
         if not api_key:
             st.warning(t["warning_api"])
         else:
+            # 1. المعالجة محلياً وتمرير اللغة المحددة للتنبيهات
+            summary = process_csv_with_pandas(df)
+            rule_flags = apply_finops_rules(df, lang=lang)
+            
+            if rule_flags:
+                st.subheader(t["rules_title"])
+                for flag in rule_flags:
+                    st.warning(flag)
+
             with st.spinner(t["status_analyzing"]):
                 try:
-                    # 1. المعالجة الإحصائية محلياً (Goal 1)
-                    summary = process_csv_with_pandas(df)
-                    
-                    # 2. تطبيق محرك القواعد البرمجية (Goal 2)
-                    rule_flags = apply_finops_rules(df)
-                    
-                    # عرض التنبيهات الفورية من محرك القواعد في الواجهة
-                    if rule_flags:
-                        st.subheader(t["rules_title"])
-                        for flag in rule_flags:
-                            st.warning(flag)
-                    
-                    # 3. بناء البرومبت المدمج لـ Gemini
                     if summary:
                         data_summary = f"""
                         Pre-calculated Billing Summary:
@@ -214,7 +219,7 @@ if df is not None:
                     You are a Cloud Financial Operations (FinOps) Expert.
                     Analyze the following pre-processed cloud invoice data and programmatic rule alerts.
                     Provide a clear, professional summary with actionable cost-saving recommendations based on these findings.
-                    Keep the response in the same language as chosen by user ({lang}).
+                    Keep the response strictly in the chosen language ({lang}).
 
                     Data Summary & Alerts:
                     {data_summary}
@@ -229,7 +234,6 @@ if df is not None:
                     result_text = response.text
                     st.write(result_text)
                     
-                    # زر تحميل PDF
                     pdf_bytes = generate_pdf_report(result_text)
                     st.download_button(
                         label=t["pdf_button"],
@@ -239,7 +243,10 @@ if df is not None:
                     )
                     
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    if "503" in str(e):
+                        st.error(t["error_503"])
+                    else:
+                        st.error(f"Error: {e}")
 
 st.markdown("---")
 st.subheader(t["b2b_header"])

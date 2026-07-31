@@ -31,7 +31,7 @@ def generate_pdf_report(analysis_text):
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🌐 Language / اللغة")
-    lang = st.selectbox("اختر لغة الواجهة / Choose Language", ["العربية", "English"])
+    lang = st.selectbox("Choose Language / اختر لغة الواجهة", ["English", "العربية"])
     st.markdown("---")
 
 # ---------------------------------------------------------

@@ -6,13 +6,25 @@ from fpdf import FPDF
 import io
 
 # ---------------------------------------------------------
-# Goal 1: دالة المعالجة الأولية باستخدام Pandas
+# Goal 1 & Goal 3: دالة المعالجة، كشف نوع السحابة والانحرافات
 # ---------------------------------------------------------
 def process_csv_with_pandas(df):
     try:
         df_clean = df.copy()
         df_clean.columns = df_clean.columns.str.strip()
         
+        # 1. كشف نوع مزود السحابة (Multi-Cloud Detection)
+        cols_str = ' '.join(df_clean.columns).lower()
+        if 'unblendedcost' in cols_str or 'lineitem' in cols_str:
+            cloud_provider = "AWS (Amazon Web Services)"
+        elif 'project_id' in cols_str or 'credits' in cols_str or 'sku' in cols_str:
+            cloud_provider = "Google Cloud Platform (GCP)"
+        elif 'metername' in cols_str or 'subscriptionname' in cols_str or 'resourcegroup' in cols_str:
+            cloud_provider = "Microsoft Azure"
+        else:
+            cloud_provider = "Generic Cloud / Unknown Provider"
+
+        # البحث عن عمود التكلفة وعمود الخدمة
         cost_col = [c for c in df_clean.columns if any(k in c.lower() for k in ['cost', 'amount', 'unblendedcost', 'cost_usd'])]
         service_col = [c for c in df_clean.columns if any(k in c.lower() for k in ['service', 'product', 'productcode'])]
         
@@ -25,20 +37,35 @@ def process_csv_with_pandas(df):
         top_services = df_clean.groupby(s_name)[c_name].sum().nlargest(5).reset_index().to_dict(orient='records')
         spikes = df_clean.nlargest(3, c_name)[[s_name, c_name]].to_dict(orient='records')
         
+        # 2. كشف الشذوذ والتكلفة المرتفعة غير الطبيعية (Anomaly Detection)
+        mean_cost = df_clean[c_name].mean()
+        std_cost = df_clean[c_name].std()
+        anomalies = []
+        
+        if std_cost > 0:
+            anomaly_df = df_clean[df_clean[c_name] > (mean_cost + 2 * std_cost)]
+            for _, row in anomaly_df.iterrows():
+                anomalies.append({
+                    "service": str(row[s_name]),
+                    "cost": float(row[c_name])
+                })
+        
         return {
             "total_spend": round(total_spend, 2),
             "top_services": top_services,
             "spikes": spikes,
             "cost_col": c_name,
-            "service_col": s_name
+            "service_col": s_name,
+            "cloud_provider": cloud_provider,
+            "anomalies": anomalies
         }
     except Exception as e:
         return None
 
 # ---------------------------------------------------------
-# Goal 2: محرك القواعد البرمجية مع دعم اللغتين (Fix Language Issue)
+# Goal 2 & Goal 3: محرك القواعد البرمجية والتنبيهات
 # ---------------------------------------------------------
-def apply_finops_rules(df, lang="English"):
+def apply_finops_rules(df, summary_info=None, lang="English"):
     flags = []
     df_str = df.astype(str).apply(lambda x: ' '.join(x), axis=1).str.lower()
     
@@ -51,7 +78,7 @@ def apply_finops_rules(df, lang="English"):
         else:
             flags.append(f"⚠️ Detected {idle_count} unused or idle resources (Unused/Idle Resources).")
 
-    # القاعدة 2: كشف النسخ الاحتياطية
+    # القاعدة 2: كشف النسخ الاحتياطية والتخزين
     storage_mask = df_str.str.contains('storage|snapshot|backup', na=False)
     if storage_mask.any():
         if lang == "العربية":
@@ -59,17 +86,24 @@ def apply_finops_rules(df, lang="English"):
         else:
             flags.append("ℹ️ Recurring storage/snapshot costs detected. Consider reviewing retention policies.")
 
-    # القاعدة 3: كشف تركز التكلفة أكثر من 40%
-    summary = process_csv_with_pandas(df)
-    if summary and summary['total_spend'] > 0:
-        for item in summary['top_services']:
+    # القاعدة 3: كشف تركز التكلفة أكثر من 40% والشذوذ
+    if summary_info and summary_info['total_spend'] > 0:
+        for item in summary_info['top_services']:
             service_cost = list(item.values())[1] if len(item.values()) > 1 else 0
-            if (service_cost / summary['total_spend']) >= 0.4:
+            if (service_cost / summary_info['total_spend']) >= 0.4:
                 service_name = list(item.values())[0]
                 if lang == "العربية":
                     flags.append(f"🚨 تنبيه تركز التكلفة: الخدمة ({service_name}) تستهلك وحدها أكثر من 40% من إجمالي الفاتورة!")
                 else:
                     flags.append(f"🚨 Cost Concentration Alert: Service ({service_name}) accounts for over 40% of the total bill!")
+                    
+        # تنبيه الشذوذ الانحرافي
+        if summary_info.get('anomalies'):
+            for anom in summary_info['anomalies']:
+                if lang == "العربية":
+                    flags.append(f"📈 قفزة تكلفة شاذة (Anomaly Detected): الخدمة ({anom['service']}) تكلفتها ${anom['cost']} وتتجاوز المعدل الطبيعي بشكل ملحوظ!")
+                else:
+                    flags.append(f"📈 Cost Anomaly Detected: Service ({anom['service']}) cost ${anom['cost']} which significantly deviates from normal patterns!")
 
     return flags
 
@@ -109,7 +143,7 @@ texts = {
         "api_label": "أدخل مفتاح Gemini API الخاص بك:",
         "api_link": "الحصول على مفتاح مجاني",
         "title": "🕵️‍♂️ مفتش الفواتير السحابية الذكي",
-        "subtitle": "اكتشف الهدر المالي في حسابات Google Cloud و AWS خلال ثوانٍ",
+        "subtitle": "اكتشف الهدر المالي في حسابات Google Cloud و AWS و Azure خلال ثوانٍ",
         "uploader_label": "قم برفع ملف الفاتورة بصيغة (CSV)",
         "sample_checkbox": "لا تملك ملفاً؟ اضغط هنا لتوليد فاتورة تجريبية وتحليلها ⚙️",
         "sample_success": "تم توليد بيانات فاتورة تجريبية بنجاح!",
@@ -117,7 +151,8 @@ texts = {
         "warning_api": "يرجى إدخال مفتاح API أولاً من الشريط الجانبي للبدء.",
         "status_analyzing": "جاري تحليل البيانات واستخراج فرص التوفير...",
         "results_title": "📊 نتائج التحليل والتوصيات:",
-        "rules_title": "⚡ تنبيهات محرك القواعد السريعة (FinOps Rules):",
+        "rules_title": "⚡ تنبيهات محرك القواعد واكتشاف الانحرافات (FinOps Rules & Anomalies):",
+        "provider_detected": "☁️ نوع المنصة السحابية المكتشفة:",
         "pdf_button": "📄 تحميل تقرير PDF الاحترافي",
         "b2b_header": "💼 خدمات الشركات والأعمال (B2B)",
         "b2b_text": "هل تريد تخفيضاً أكبر في تكاليف السحاب؟ يتوفر فريقنا المتخصص لتقديم استشارات وتدقيق شامل لشركتك.",
@@ -131,7 +166,7 @@ texts = {
         "api_label": "Enter your Gemini API Key:",
         "api_link": "Get a Free Key",
         "title": "🕵️‍♂️ Smart Cloud Bill Auditor",
-        "subtitle": "Detect financial waste in Google Cloud & AWS accounts within seconds",
+        "subtitle": "Detect financial waste in Google Cloud, AWS & Azure accounts within seconds",
         "uploader_label": "Upload your bill file (CSV)",
         "sample_checkbox": "Don't have a file? Click here to generate a sample bill and analyze it ⚙️",
         "sample_success": "Sample bill data generated successfully!",
@@ -139,7 +174,8 @@ texts = {
         "warning_api": "Please enter your API Key from the sidebar first to start.",
         "status_analyzing": "Analyzing data and identifying cost-saving opportunities...",
         "results_title": "📊 Audit Results & Recommendations:",
-        "rules_title": "⚡ Rule Engine Quick Alerts (FinOps Rules):",
+        "rules_title": "⚡ Rule Engine Quick Alerts & Anomaly Detection:",
+        "provider_detected": "☁️ Detected Cloud Provider:",
         "pdf_button": "📄 Download Professional PDF Report",
         "b2b_header": "💼 B2B & Enterprise Services",
         "b2b_text": "Need deeper cloud cost reduction? Our expert team provides end-to-end cloud audit consulting.",
@@ -189,9 +225,15 @@ if df is not None:
         if not api_key:
             st.warning(t["warning_api"])
         else:
-            # 1. المعالجة محلياً وتمرير اللغة المحددة للتنبيهات
+            # 1. المعالجة الإحصائية وكشف نوع السحابة (Goal 1 & 3)
             summary = process_csv_with_pandas(df)
-            rule_flags = apply_finops_rules(df, lang=lang)
+            
+            # عرض المزود المكتشف
+            if summary and summary.get("cloud_provider"):
+                st.info(f"{t['provider_detected']} **{summary['cloud_provider']}**")
+            
+            # 2. القواعد البرمجية واكتشاف الشذوذ (Goal 2 & 3)
+            rule_flags = apply_finops_rules(df, summary_info=summary, lang=lang)
             
             if rule_flags:
                 st.subheader(t["rules_title"])
@@ -203,10 +245,12 @@ if df is not None:
                     if summary:
                         data_summary = f"""
                         Pre-calculated Billing Summary:
+                        - Identified Cloud Provider: {summary['cloud_provider']}
                         - Total Spend: ${summary['total_spend']}
                         - Top Costliest Services: {summary['top_services']}
                         - Single Cost Spikes: {summary['spikes']}
-                        - Programmatic FinOps Rule Flags Detected: {rule_flags}
+                        - Detected Cost Anomalies: {summary['anomalies']}
+                        - Programmatic FinOps Rule Flags: {rule_flags}
                         
                         Full Raw Data:
                         {df.to_string()}
@@ -217,7 +261,7 @@ if df is not None:
                     client = genai.Client(api_key=api_key)
                     prompt = f"""
                     You are a Cloud Financial Operations (FinOps) Expert.
-                    Analyze the following pre-processed cloud invoice data and programmatic rule alerts.
+                    Analyze the following pre-processed cloud invoice data, provider context, and programmatic rule alerts.
                     Provide a clear, professional summary with actionable cost-saving recommendations based on these findings.
                     Keep the response strictly in the chosen language ({lang}).
 

@@ -108,14 +108,14 @@ def apply_finops_rules(df, summary_info=None, lang="English"):
     return flags
 
 # ---------------------------------------------------------
-# دالة توليد تقرير PDF
+# Goal 4: دالة توليد تقرير PDF المطور والكامل
 # ---------------------------------------------------------
 def generate_pdf_report(analysis_text):
     pdf = FPDF()
     pdf.add_page()
     
     pdf.set_font("Helvetica", style="B", size=16)
-    pdf.cell(0, 10, txt="Cloud Bill Audit Report", ln=1, align="C")
+    pdf.cell(0, 10, txt="Cloud Audit & FinOps Action Plan Report", ln=1, align="C")
     pdf.ln(10)
     
     pdf.set_font("Helvetica", size=10)
@@ -143,17 +143,17 @@ texts = {
         "api_label": "أدخل مفتاح Gemini API الخاص بك:",
         "api_link": "الحصول على مفتاح مجاني",
         "title": "🕵️‍♂️ مفتش الفواتير السحابية الذكي",
-        "subtitle": "اكتشف الهدر المالي في حسابات Google Cloud و AWS و Azure خلال ثوانٍ",
+        "subtitle": "اكتشف الهدر المالي واحصل على خطة توفير تنفيذية لـ AWS و GCP و Azure",
         "uploader_label": "قم برفع ملف الفاتورة بصيغة (CSV)",
         "sample_checkbox": "لا تملك ملفاً؟ اضغط هنا لتوليد فاتورة تجريبية وتحليلها ⚙️",
         "sample_success": "تم توليد بيانات فاتورة تجريبية بنجاح!",
-        "btn_analyze": "🔍 بدء تحليل الفاتورة بواسطة الذكاء الاصطناعي",
+        "btn_analyze": "🔍 بدء تحليل الفاتورة وإنشاء خطة التوفير",
         "warning_api": "يرجى إدخال مفتاح API أولاً من الشريط الجانبي للبدء.",
-        "status_analyzing": "جاري تحليل البيانات واستخراج فرص التوفير...",
-        "results_title": "📊 نتائج التحليل والتوصيات:",
+        "status_analyzing": "جاري تحليل الفاتورة وصياغة التوصيات وخطة العمل...",
+        "results_title": "📊 التقرير النهائي وخطة العمل التنفيذية (FinOps Action Plan):",
         "rules_title": "⚡ تنبيهات محرك القواعد واكتشاف الانحرافات (FinOps Rules & Anomalies):",
         "provider_detected": "☁️ نوع المنصة السحابية المكتشفة:",
-        "pdf_button": "📄 تحميل تقرير PDF الاحترافي",
+        "pdf_button": "📄 تحميل تقرير التوصيات وخطة العمل (PDF)",
         "b2b_header": "💼 خدمات الشركات والأعمال (B2B)",
         "b2b_text": "هل تريد تخفيضاً أكبر في تكاليف السحاب؟ يتوفر فريقنا المتخصص لتقديم استشارات وتدقيق شامل لشركتك.",
         "b2b_contact": "📩 للتواصل وحجز جلسة تدقيق:",
@@ -166,17 +166,17 @@ texts = {
         "api_label": "Enter your Gemini API Key:",
         "api_link": "Get a Free Key",
         "title": "🕵️‍♂️ Smart Cloud Bill Auditor",
-        "subtitle": "Detect financial waste in Google Cloud, AWS & Azure accounts within seconds",
+        "subtitle": "Detect financial waste & get an actionable savings plan for AWS, GCP & Azure",
         "uploader_label": "Upload your bill file (CSV)",
         "sample_checkbox": "Don't have a file? Click here to generate a sample bill and analyze it ⚙️",
         "sample_success": "Sample bill data generated successfully!",
-        "btn_analyze": "🔍 Start AI Audit Analysis",
+        "btn_analyze": "🔍 Start AI Audit & Build Action Plan",
         "warning_api": "Please enter your API Key from the sidebar first to start.",
-        "status_analyzing": "Analyzing data and identifying cost-saving opportunities...",
-        "results_title": "📊 Audit Results & Recommendations:",
+        "status_analyzing": "Analyzing invoice & constructing actionable optimization plan...",
+        "results_title": "📊 Final Audit Report & Action Plan:",
         "rules_title": "⚡ Rule Engine Quick Alerts & Anomaly Detection:",
         "provider_detected": "☁️ Detected Cloud Provider:",
-        "pdf_button": "📄 Download Professional PDF Report",
+        "pdf_button": "📄 Download Complete Action Plan Report (PDF)",
         "b2b_header": "💼 B2B & Enterprise Services",
         "b2b_text": "Need deeper cloud cost reduction? Our expert team provides end-to-end cloud audit consulting.",
         "b2b_contact": "📩 Contact us for an audit session:",
@@ -259,13 +259,21 @@ if df is not None:
                         data_summary = df.to_string()
 
                     client = genai.Client(api_key=api_key)
+                    
+                    # Goal 4: توجيه الـ Prompt لبناء خطة العمل وحساب التوفير
                     prompt = f"""
-                    You are a Cloud Financial Operations (FinOps) Expert.
-                    Analyze the following pre-processed cloud invoice data, provider context, and programmatic rule alerts.
-                    Provide a clear, professional summary with actionable cost-saving recommendations based on these findings.
-                    Keep the response strictly in the chosen language ({lang}).
+                    You are a Senior Cloud Financial Operations (FinOps) Specialist.
+                    Analyze the pre-processed cloud bill data, detected provider, and rule alerts below.
 
-                    Data Summary & Alerts:
+                    Structure your output strictly in the language: {lang} with the following sections:
+                    1. Executive Summary & Provider Overview
+                    2. Estimated Savings & Potential ROI (Provide estimated $ or % savings based on anomalies/unused resources)
+                    3. Prioritized Step-by-Step Action Plan:
+                       - High Priority / Quick Wins (Immediate actions to stop waste)
+                       - Medium Priority (Optimization, commitment plans, rightsizing)
+                       - Long-term Governance Policies
+                    
+                    Data Summary & System Alerts:
                     {data_summary}
                     """
                     

@@ -5,154 +5,113 @@ from google.genai import types
 from fpdf import FPDF
 import io
 
-# ---------------------------------------------------------
-# دالة توليد تقرير PDF
-# ---------------------------------------------------------
+# --------------------------------------------------
+# 1. دالة توليد تقرير PDF
+# --------------------------------------------------
 def generate_pdf_report(analysis_text):
     pdf = FPDF()
     pdf.add_page()
-    
-    # Header
     pdf.set_font("Helvetica", style="B", size=16)
     pdf.cell(0, 10, txt="Cloud Bill Audit Report", ln=1, align="C")
     pdf.ln(10)
+    pdf.set_font("Helvetica", size=11)
     
-    # Body Content
-    pdf.set_font("Helvetica", size=10)
-    
-    # تنظيف النص وتصفية أي أحرف غير لاتينية
-    clean_text = analysis_text.encode('latin-1', 'ignore').decode('latin-1')
-    pdf.multi_cell(0, 6, txt=clean_text)
-    
+    # إضافة النص للتقرير مع معالجة الرموز
+    for line in analysis_text.split('\n'):
+        clean_line = line.encode('latin-1', 'replace').decode('latin-1')
+        pdf.multi_cell(0, 8, txt=clean_line)
+        
     return bytes(pdf.output())
 
-# ---------------------------------------------------------
-# إعداد قائمة اختيار اللغة في الشريط الجانبي أولاً
-# ---------------------------------------------------------
-with st.sidebar:
-    st.title("🌐 Language / اللغة")
-    lang = st.selectbox("Choose Language / اختر لغة الواجهة", ["English", "العربية"])
-    st.markdown("---")
+# --------------------------------------------------
+# 2. دالة معالجة الـ CSV بـ Pandas (Pre-processing)
+# --------------------------------------------------
+def process_csv_with_pandas(uploaded_file):
+    try:
+        df = pd.read_csv(uploaded_file)
+        df.columns = df.columns.str.strip().str.lower()
+        
+        # البحث عن أعمدة التكلفة والخدمة تلقائياً
+        cost_col = [c for c in df.columns if 'cost' in c or 'amount' in c or 'unblendedcost' in c]
+        service_col = [c for c in df.columns if 'service' in c or 'product' in c or 'productcode' in c]
+        
+        c_name = cost_col[0] if cost_col else df.columns[-1]
+        s_name = service_col[0] if service_col else df.columns[0]
+        
+        df[c_name] = pd.to_numeric(df[c_name], errors='coerce').fillna(0)
+        
+        total_spend = df[c_name].sum()
+        top_services = df.groupby(s_name)[c_name].sum().nlargest(5).reset_index().to_dict(orient='records')
+        spikes = df.nlargest(3, c_name)[[s_name, c_name]].to_dict(orient='records')
+        
+        return {
+            "total_spend": round(total_spend, 2),
+            "top_services": top_services,
+            "spikes": spikes
+        }, None
+    except Exception as e:
+        return None, str(e)
 
-# ---------------------------------------------------------
-# نصوص الواجهة بكلتا اللغتين
-# ---------------------------------------------------------
-texts = {
-    "العربية": {
-        "dir": "rtl",
-        "align": "right",
-        "sidebar_title": "🔑 إعدادات الاتصال",
-        "api_label": "أدخل مفتاح Gemini API الخاص بك:",
-        "api_link": "الحصول على مفتاح مجاني",
-        "title": "🕵️‍♂️ مفتش الفواتير السحابية الذكي",
-        "subtitle": "اكتشف الهدر المالي في حسابات Google Cloud و AWS خلال ثوانٍ",
-        "uploader_label": "قم برفع ملف الفاتورة بصيغة (CSV)",
-        "sample_checkbox": "لا تملك ملفاً؟ اضغط هنا لتوليد فاتورة تجريبية وتحليلها ⚙️",
-        "sample_success": "تم توليد بيانات فاتورة تجريبية بنجاح!",
-        "btn_analyze": "🔍 بدء تحليل الفاتورة بواسطة الذكاء الاصطناعي",
-        "warning_api": "يرجى إدخال مفتاح API أولاً من الشريط الجانبي للبدء.",
-        "status_analyzing": "جاري تحليل البيانات واستخراج فرص التوفير...",
-        "results_title": "📊 نتائج التحليل والتوصيات:",
-        "pdf_button": "📄 تحميل تقرير PDF الاحترافي",
-        "b2b_header": "💼 خدمات الشركات والأعمال (B2B)",
-        "b2b_text": "هل تريد تخفيضاً أكبر في تكاليف السحاب؟ يتوفر فريقنا المتخصص لتقديم استشارات وتدقيق شامل لشركتك.",
-        "b2b_contact": "📩 للتواصل وحجز جلسة تدقيق:"
-    },
-    "English": {
-        "dir": "ltr",
-        "align": "left",
-        "sidebar_title": "🔑 Connection Settings",
-        "api_label": "Enter your Gemini API Key:",
-        "api_link": "Get a Free Key",
-        "title": "🕵️‍♂️ Smart Cloud Bill Auditor",
-        "subtitle": "Detect financial waste in Google Cloud & AWS accounts within seconds",
-        "uploader_label": "Upload your bill file (CSV)",
-        "sample_checkbox": "Don't have a file? Click here to generate a sample bill and analyze it ⚙️",
-        "sample_success": "Sample bill data generated successfully!",
-        "btn_analyze": "🔍 Start AI Audit Analysis",
-        "warning_api": "Please enter your API Key from the sidebar first to start.",
-        "status_analyzing": "Analyzing data and identifying cost-saving opportunities...",
-        "results_title": "📊 Audit Results & Recommendations:",
-        "pdf_button": "📄 Download Professional PDF Report",
-        "b2b_header": "💼 B2B & Enterprise Services",
-        "b2b_text": "Need deeper cloud cost reduction? Our expert team provides end-to-end cloud audit consulting.",
-        "b2b_contact": "📩 Contact us for an audit session:"
-    }
-}
+# --------------------------------------------------
+# 3. واجهة التطبيق (Streamlit Interface)
+# --------------------------------------------------
+st.set_page_config(page_title="Cloud Bill Auditor", layout="wide")
+st.title("☁️ Cloud Bill Auditor & FinOps Optimizer")
+st.write("قم برفع ملف فاتورة السحابة (CSV) للحصول على تحليل فوري وتوصيات تقليل التكاليف.")
 
-t = texts[lang]
+# جلب مفتاح الـ API سرياً من Streamlit Secrets
+api_key = st.secrets.get("GEMINI_API_KEY", "")
 
-# ---------------------------------------------------------
-# بقية إعدادات الشريط الجانبي
-# ---------------------------------------------------------
-with st.sidebar:
-    st.title(t["sidebar_title"])
-    api_key = st.secrets.get("GEMINI_API_KEY", "")
-# ---------------------------------------------------------
-# الواجهة الرئيسية
-# ---------------------------------------------------------
-st.title(t["title"])
-st.write(f"### {t['subtitle']}")
+uploaded_file = st.file_uploader("اختر ملف الفاتورة (CSV)", type=["csv"])
 
-uploaded_file = st.file_uploader(t["uploader_label"], type=["csv"])
-
-df = None
-
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    st.dataframe(df.head())
-
-use_sample = st.checkbox(t["sample_checkbox"])
-
-if use_sample and df is None:
-    sample_data = {
-        "Service": ["Compute Engine", "Cloud Storage", "BigQuery", "Cloud SQL"],
-        "Cost_USD": [1200.50, 450.00, 890.20, 310.00],
-        "Usage_Type": ["N1-standard-8 (Unused 80%)", "Standard Storage", "Analysis Queries", "db-custom-4-16000"],
-        "Region": ["us-central1", "us-east1", "us-central1", "europe-west1"]
-    }
-    df = pd.DataFrame(sample_data)
-    st.success(t["sample_success"])
-    st.dataframe(df)
-
-if df is not None:
-    if st.button(t["btn_analyze"]):
-        if not api_key:
-            st.warning(t["warning_api"])
-        else:
-            with st.spinner(t["status_analyzing"]):
+if uploaded_file and st.button("بدء التحليل 🔍"):
+    if not api_key:
+        st.error("لم يتم العثور على مفتاح GEMINI_API_KEY في الإعدادات السرية (Secrets).")
+    else:
+        with st.spinner("جاري معالجة البيانات وتحليل الفاتورة..."):
+            # الخطوة 1: المعالجة الإحصائية بـ Pandas
+            summary, err = process_csv_with_pandas(uploaded_file)
+            
+            if err:
+                st.error(f"خطأ أثناء قراءة الملف: {err}")
+            else:
+                # الخطوة 2: إرسال ملخص البيانات لـ Gemini
+                prompt = f"""
+                You are an expert Cloud FinOps Consultant. Analyze this pre-processed cloud cost summary:
+                
+                - Total Spend: ${summary['total_spend']}
+                - Top 5 Costliest Services: {summary['top_services']}
+                - Highest Single Line-Item Spikes: {summary['spikes']}
+                
+                Please provide:
+                1. Executive Summary of the spend.
+                2. Top 3 actionable recommendations to save cost immediately.
+                3. Estimated potential savings percentage.
+                """
+                
                 try:
+                    # الاتصال بموديل Gemini
                     client = genai.Client(api_key=api_key)
-                    prompt = f"""
-                    You are a Cloud Financial Operations (FinOps) Expert.
-                    Analyze the following cloud invoice data and provide a clear, professional summary with actionable cost-saving recommendations.
-                    Keep the response in the same language as chosen by user ({lang}).
-
-                    Data:
-                    {df.to_string()}
-                    """
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model="gemini-2.5-flash",
                         contents=prompt
                     )
                     
-                    st.markdown(f"### {t['results_title']}")
-                    result_text = response.text
-                    st.write(result_text)
+                    analysis_result = response.text
                     
-                    # زر تحميل PDF
-                    pdf_bytes = generate_pdf_report(result_text)
+                    # عرض النتائج في الواجهة
+                    st.success("تم التحليل بنجاح!")
+                    st.metric("إجمالي الإنفاق", f"${summary['total_spend']}")
+                    st.markdown("### 📊 تقرير الذكاء الاصطناعي والتوصيات:")
+                    st.write(analysis_result)
+                    
+                    # زر تحميل التقرير PDF
+                    pdf_bytes = generate_pdf_report(analysis_result)
                     st.download_button(
-                        label=t["pdf_button"],
+                        label="📄 تحميل التقرير PDF",
                         data=pdf_bytes,
-                        file_name="Cloud_Bill_Audit_Report.pdf",
+                        file_name="cloud_audit_report.pdf",
                         mime="application/pdf"
                     )
-                    
                 except Exception as e:
-                    st.error(f"Error: {e}")
-
-st.markdown("---")
-st.subheader(t["b2b_header"])
-st.write(t["b2b_text"])
-st.info(f"{t['b2b_contact']} support@cloudauditor.com")
+                    st.error(f"حدث خطأ أثناء الاتصال بالذكاء الاصطناعي: {e}")

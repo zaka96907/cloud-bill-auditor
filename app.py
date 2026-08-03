@@ -58,6 +58,24 @@ def process_csv_with_pandas(df):
             "service_col": s_name,
             "cloud_provider": cloud_provider,
             "anomalies": anomalies
+            # ---------------------------------------------------------
+# M3: كاشف التكرار المفرط للـ Logs (Log Flood Detector)
+# ---------------------------------------------------------
+def detect_log_floods(df, lang="English"):
+    log_flags = []
+    df_str = df.astype(str).apply(lambda x: ' '.join(x), axis=1).str.lower()
+    
+    log_keywords = 'cloudwatch|log-group|ingestion|putlogevents|verbose|error_loop|stdout'
+    log_mask = df_str.str.contains(log_keywords, na=False)
+    
+    if log_mask.any():
+        flood_count = log_mask.sum()
+        if lang == "العربية":
+            log_flags.append(f"🌊 [Log Flood Detector]: تم كشف {flood_count} من الأنشطة المتعلقة بالـ Logs المرتفعة! تحذير من استهلاك CloudWatch Ingestion المفرط.")
+        else:
+            log_flags.append(f"🌊 [Log Flood Detector]: Detected {flood_count} high-volume logging events/rows! Risk of CloudWatch Ingestion cost surge.")
+
+    return log_flags
         }
     except Exception as e:
         return None

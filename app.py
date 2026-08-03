@@ -104,7 +104,9 @@ def apply_finops_rules(df, summary_info=None, lang="English"):
                     flags.append(f"📈 قفزة تكلفة شاذة (Anomaly Detected): الخدمة ({anom['service']}) تكلفتها ${anom['cost']} وتتجاوز المعدل الطبيعي بشكل ملحوظ!")
                 else:
                     flags.append(f"📈 Cost Anomaly Detected: Service ({anom['service']}) cost ${anom['cost']} which significantly deviates from normal patterns!")
-
+# M3: Log Flood Check
+    log_alerts = detect_log_floods(df, lang=lang)
+    flags.extend(log_alerts)
     return flags
 
 # ---------------------------------------------------------

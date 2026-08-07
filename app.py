@@ -66,15 +66,20 @@ def process_csv_with_pandas(df):
 # ---------------------------------------------------------
 def detect_log_floods(df, lang="English"):
     log_flags = []
-    df_str = df.astype(str).apply(lambda x: ' '.join(x), axis=1).str.lower()
-    log_keywords = 'cloudwatch|log-group|ingestion|putlogevents|verbose|error_loop|stdout'
-    log_mask = df_str.str.contains(log_keywords, na=False)
-    if log_mask.any():
-        flood_count = log_mask.sum()
-        if lang == "العربية":
-            log_flags.append(f"🌊 [Log Flood Detector]: تم كشف {flood_count} من الأنشطة المتعلقة بالـ Logs المرتفعة!")
-        else:
-            log_flags.append(f"🌊 [Log Flood Detector]: Detected {flood_count} high-volume logging events!")
+    try:
+        text_series = df.astype(str).fillna('').apply(lambda row: ' '.join(row.values), axis=1).str.lower()
+        log_keywords = 'cloudwatch|log-group|ingestion|putlogevents|verbose|error_loop|stdout'
+        log_mask = text_series.str.contains(log_keywords, na=False)
+        
+        if log_mask.any():
+            flood_count = int(log_mask.sum())
+            if lang == "العربية":
+                log_flags.append(f"🌊 [Log Flood Detector]: تم كشف {flood_count} من الأنشطة المتعلقة بالـ Logs المرتفعة!")
+            else:
+                log_flags.append(f"🌊 [Log Flood Detector]: Detected {flood_count} high-volume logging events!")
+    except Exception:
+        pass
+        
     return log_flags
 # ---------------------------------------------------------
 # M4: دالة توليد الرسوم البيانية التفاعلية (Visual Cost Breakdown)

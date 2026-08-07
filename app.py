@@ -4,6 +4,7 @@ from google import genai
 from google.genai import types
 from fpdf import FPDF
 import io
+import plotly.express as px
 
 # ---------------------------------------------------------
 # Goal 1 & Goal 3: دالة المعالجة، كشف نوع السحابة والانحرافات
@@ -61,6 +62,7 @@ def process_csv_with_pandas(df):
         }
     except Exception as e:
         return None
+
 # ---------------------------------------------------------
 # M3: دالة كشف الـ Logs المفرطة (Log Flood Detector)
 # ---------------------------------------------------------
@@ -81,11 +83,10 @@ def detect_log_floods(df, lang="English"):
         pass
         
     return log_flags
+
 # ---------------------------------------------------------
 # M4: دالة توليد الرسوم البيانية التفاعلية (Visual Cost Breakdown)
 # ---------------------------------------------------------
-import plotly.express as px
-
 def render_cost_visualizations(df, summary_info, lang="English"):
     if not summary_info:
         return None, None
@@ -127,6 +128,7 @@ def render_cost_visualizations(df, summary_info, lang="English"):
     )
     
     return fig_pie, fig_bar
+
 # ---------------------------------------------------------
 # Goal 2 & Goal 3: محرك القواعد البرمجية والتنبيهات
 # ---------------------------------------------------------
@@ -148,6 +150,14 @@ def apply_finops_rules(df, summary_info=None, lang="English"):
             else:
                 flags.append(f"⚠️ [Idle Resource Detector]: Detected {count} idle or unattached resources!")
                 
+        # القاعدة 2: كشف النسخ الاحتياطية والتخزين
+        storage_mask = df_str.str.contains('storage|snapshot|backup', na=False)
+        if storage_mask.any():
+            if lang == "العربية":
+                flags.append("ℹ️ توجد تكاليف متكررة للنسخ الاحتياطية والتخزين قد تحتاج لمراجعة سياسة الاحتفاظ.")
+            else:
+                flags.append("ℹ️ Recurring storage/snapshot costs detected. Consider reviewing retention policies.")
+
     except Exception:
         pass
 
@@ -158,17 +168,8 @@ def apply_finops_rules(df, summary_info=None, lang="English"):
     except Exception:
         pass
 
-    return flags
-    # القاعدة 2: كشف النسخ الاحتياطية والتخزين
-    storage_mask = df_str.str.contains('storage|snapshot|backup', na=False)
-    if storage_mask.any():
-        if lang == "العربية":
-            flags.append("ℹ️ توجد تكاليف متكررة للنسخ الاحتياطية والتخزين قد تحتاج لمراجعة سياسة الاحتفاظ.")
-        else:
-            flags.append("ℹ️ Recurring storage/snapshot costs detected. Consider reviewing retention policies.")
-
     # القاعدة 3: كشف تركز التكلفة أكثر من 40% والشذوذ
-    if summary_info and summary_info['total_spend'] > 0:
+    if summary_info and summary_info.get('total_spend', 0) > 0:
         for item in summary_info['top_services']:
             service_cost = list(item.values())[1] if len(item.values()) > 1 else 0
             if (service_cost / summary_info['total_spend']) >= 0.4:
@@ -185,9 +186,7 @@ def apply_finops_rules(df, summary_info=None, lang="English"):
                     flags.append(f"📈 قفزة تكلفة شاذة (Anomaly Detected): الخدمة ({anom['service']}) تكلفتها ${anom['cost']} وتتجاوز المعدل الطبيعي بشكل ملحوظ!")
                 else:
                     flags.append(f"📈 Cost Anomaly Detected: Service ({anom['service']}) cost ${anom['cost']} which significantly deviates from normal patterns!")
-# M3: Log Flood Check
-    log_alerts = detect_log_floods(df, lang=lang)
-    flags.extend(log_alerts)
+
     return flags
 
 # ---------------------------------------------------------
@@ -274,7 +273,9 @@ t = texts[lang]
 # ---------------------------------------------------------
 with st.sidebar:
     st.title(t["sidebar_title"])
-    api_key = st.secrets.get("GEMINI_API_KEY", "")
+    api_key_input = st.text_input(t["api_label"], value="", type="password")
+    st.markdown(f"[{t['api_link']}](https://aistudio.google.com/app/apikey)")
+    api_key = api_key_input if api_key_input else st.secrets.get("GEMINI_API_KEY", "")
 
 # ---------------------------------------------------------
 # الواجهة الرئيسية
@@ -304,7 +305,8 @@ def load_data(file):
 
 if uploaded_file is not None:
     df = load_data(uploaded_file)
-    st.dataframe(df.head())
+    if df is not None:
+        st.dataframe(df.head())
 
 use_sample = st.checkbox(t["sample_checkbox"])
 
@@ -330,7 +332,8 @@ if df is not None:
             # عرض المزود المكتشف
             if summary and summary.get("cloud_provider"):
                 st.info(f"{t['provider_detected']} **{summary['cloud_provider']}**")
-# عرض الرسوم البيانية التفاعلية
+                
+            # عرض الرسوم البيانية التفاعلية
             fig_pie, fig_bar = render_cost_visualizations(df, summary, lang=lang)
             if fig_pie and fig_bar:
                 st.subheader("📊 التحليل البصري للتكاليف" if lang == "العربية" else "📊 Visual Cost Breakdown")
@@ -339,6 +342,7 @@ if df is not None:
                     st.plotly_chart(fig_pie, use_container_width=True)
                 with col2:
                     st.plotly_chart(fig_bar, use_container_width=True)
+                    
             # 2. القواعد البرمجية واكتشاف الشذوذ (Goal 2 & 3)
             rule_flags = apply_finops_rules(df, summary_info=summary, lang=lang)
             

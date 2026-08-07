@@ -132,17 +132,33 @@ def render_cost_visualizations(df, summary_info, lang="English"):
 # ---------------------------------------------------------
 def apply_finops_rules(df, summary_info=None, lang="English"):
     flags = []
-    df_str = df.astype(str).apply(lambda x: ' '.join(x), axis=1).str.lower()
-    
-    # القاعدة 1: كشف الموارد المتروكة
-    idle_mask = df_str.str.contains('unused|idle|unattached|orphan|stopped', na=False)
-    if idle_mask.any():
-        idle_count = idle_mask.sum()
-        if lang == "العربية":
-            flags.append(f"⚠️ تم كشف {idle_count} من الموارد المتروكة أو غير المستغلة (Unused/Idle Resources).")
-        else:
-            flags.append(f"⚠️ Detected {idle_count} unused or idle resources (Unused/Idle Resources).")
+    if df is None or df.empty:
+        return flags
+        
+    try:
+        # تحويل نصوص الجدول بأمان لتفادي أخطاء join مع القيم الفارغة
+        df_str = df.astype(str).fillna('').apply(lambda row: ' '.join(row.values), axis=1).str.lower()
+        
+        # كشف الموارد المتروكة وغير المستغلة
+        unused_mask = df_str.str.contains('unused|idle|unattached|orphan|stopped', na=False)
+        if unused_mask.any():
+            count = int(unused_mask.sum())
+            if lang == "العربية":
+                flags.append(f"⚠️ [Idle Resource Detector]: تم كشف {count} من الموارد المتروكة أو غير المستغلة!")
+            else:
+                flags.append(f"⚠️ [Idle Resource Detector]: Detected {count} idle or unattached resources!")
+                
+    except Exception:
+        pass
 
+    # دمج تنبيهات الـ Log Flooding
+    try:
+        log_flags = detect_log_floods(df, lang=lang)
+        flags.extend(log_flags)
+    except Exception:
+        pass
+
+    return flags
     # القاعدة 2: كشف النسخ الاحتياطية والتخزين
     storage_mask = df_str.str.contains('storage|snapshot|backup', na=False)
     if storage_mask.any():

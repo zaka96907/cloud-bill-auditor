@@ -261,12 +261,28 @@ with st.sidebar:
 st.title(t["title"])
 st.write(f"### {t['subtitle']}")
 
-uploaded_file = st.file_uploader(t["uploader_label"], type=["csv"])
+# دعم رفع وقراءة صيغ متعددة (CSV, XLSX, JSON)
+uploaded_file = st.file_uploader(t["uploader_label"], type=["csv", "xlsx", "json"])
 
 df = None
 
+def load_data(file):
+    if file is None:
+        return None
+    try:
+        filename = file.name.lower()
+        if filename.endswith('.csv'):
+            return pd.read_csv(file)
+        elif filename.endswith('.xlsx'):
+            return pd.read_excel(file)
+        elif filename.endswith('.json'):
+            return pd.read_json(file)
+    except Exception as e:
+        st.error(f"Error reading file / خطأ في قراءة الملف: {e}")
+        return None
+
 if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
+    df = load_data(uploaded_file)
     st.dataframe(df.head())
 
 use_sample = st.checkbox(t["sample_checkbox"])

@@ -61,7 +61,52 @@ def process_csv_with_pandas(df):
         }
     except Exception as e:
         return None
+# ---------------------------------------------------------
+# M4: دالة توليد الرسوم البيانية التفاعلية (Visual Cost Breakdown)
+# ---------------------------------------------------------
+import plotly.express as px
 
+def render_cost_visualizations(df, summary_info, lang="English"):
+    if not summary_info:
+        return None, None
+    
+    c_name = summary_info["cost_col"]
+    s_name = summary_info["service_col"]
+    
+    service_df = df.groupby(s_name)[c_name].sum().reset_index()
+    service_df = service_df.sort_values(by=c_name, ascending=False)
+    
+    pie_title = "توزيع التكاليف حسب الخدمة" if lang == "العربية" else "Cost Distribution by Service"
+    fig_pie = px.pie(
+        service_df, 
+        values=c_name, 
+        names=s_name, 
+        title=pie_title,
+        hole=0.4,
+        color_discrete_sequence=px.colors.qualitative.Pastel
+    )
+    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+    fig_pie.update_layout(margin=dict(t=40, b=20, l=20, r=20))
+
+    bar_title = "أعلى 5 خدمات استهلاكاً" if lang == "العربية" else "Top 5 Cost-Consuming Services"
+    top_services = service_df.head(5)
+    fig_bar = px.bar(
+        top_services, 
+        x=c_name, 
+        y=s_name, 
+        orientation='h',
+        title=bar_title,
+        text_auto='.2f',
+        color=c_name,
+        color_continuous_scale='Reds'
+    )
+    fig_bar.update_layout(
+        yaxis=dict(autorange="reversed"),
+        margin=dict(t=40, b=20, l=20, r=20),
+        coloraxis_showscale=False
+    )
+    
+    return fig_pie, fig_bar
 # ---------------------------------------------------------
 # Goal 2 & Goal 3: محرك القواعد البرمجية والتنبيهات
 # ---------------------------------------------------------
@@ -233,7 +278,15 @@ if df is not None:
             # عرض المزود المكتشف
             if summary and summary.get("cloud_provider"):
                 st.info(f"{t['provider_detected']} **{summary['cloud_provider']}**")
-            
+# عرض الرسوم البيانية التفاعلية
+            fig_pie, fig_bar = render_cost_visualizations(df, summary, lang=lang)
+            if fig_pie and fig_bar:
+                st.subheader("📊 التحليل البصري للتكاليف" if lang == "العربية" else "📊 Visual Cost Breakdown")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                with col2:
+                    st.plotly_chart(fig_bar, use_container_width=True)
             # 2. القواعد البرمجية واكتشاف الشذوذ (Goal 2 & 3)
             rule_flags = apply_finops_rules(df, summary_info=summary, lang=lang)
             

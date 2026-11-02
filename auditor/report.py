@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from .analytics import Summary
+from .i18n import tr
 from .parsing import Bill
 from .rules import AuditResult
 
@@ -107,7 +108,12 @@ def to_markdown(bill: Bill, s: Summary, audit: AuditResult, lang: str, ai_text: 
 
     if ai_text:
         out += ["", "---", "", f"## {t['ai']}", "", ai_text.strip()]
+    out += ["", "---", "", f"_{disclaimer(lang)}_"]
     return "\n".join(out) + "\n"
+
+
+def disclaimer(lang: str) -> str:
+    return tr("disclaimer", lang).replace("ℹ️", "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +124,12 @@ def to_excel(bill: Bill, s: Summary, audit: AuditResult, lang: str, ai_text: str
     buf = io.BytesIO()
     overview = pd.DataFrame({
         "metric": [t["provider"], t["period"], t["total"], t["savings"], t["forecast"],
-                   t["runrate"], t["untagged"]],
+                   t["runrate"], t["untagged"], "Disclaimer"],
         "value": [bill.provider_label, _period(s), s.total, round(audit.total_savings, 2),
                   round(s.forecast_month_end, 2) if s.forecast_month_end else None,
                   round(s.run_rate_monthly, 2) if s.run_rate_monthly else None,
-                  round(s.untagged_pct, 1) if s.untagged_pct is not None else None],
+                  round(s.untagged_pct, 1) if s.untagged_pct is not None else None,
+                  disclaimer(lang)],
     })
     findings = pd.DataFrame([{
         "severity": f.severity, "confidence": f.confidence, "category": f.category,

@@ -12,7 +12,7 @@ import json
 import pandas as pd
 import streamlit as st
 
-from auditor import __version__, ai, analytics, charts, parsing, report, rules, samples
+from auditor import __version__, ai, analytics, charts, licensing, parsing, report, rules, samples
 from auditor.i18n import AR, LANGUAGES, tr
 
 st.set_page_config(page_title="Cloud Bill Auditor", page_icon="🕵️", layout="wide",
@@ -20,6 +20,7 @@ st.set_page_config(page_title="Cloud Bill Auditor", page_icon="🕵️", layout=
 
 SEV_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡", "info": "🔵"}
 MAP_FIELDS = ["cost", "service", "date", "region", "resource", "usage", "account"]
+REPO_URL = "https://github.com/zaka96907/cloud-bill-auditor/blob/main"
 
 
 # ---------------------------------------------------------------------------
@@ -29,31 +30,50 @@ def money(v: float | None, decimals: int = 0) -> str:
     return "—" if v is None else f"${v:,.{decimals}f}"
 
 
-def _secret(name: str) -> str:
+def _all_secrets() -> dict:
     try:
-        return st.secrets.get(name, "")
+        return dict(st.secrets)
     except Exception:  # no secrets.toml
-        return ""
+        return {}
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
-def analyze(files: tuple, overrides_json: str, lang: str, disabled: tuple, threshold: float):
+def analyze(files: tuple, overrides: dict, lang: str, disabled: tuple, threshold: float):
     frames = [parsing.read_file(data, name) for name, data in files]
     raw = pd.concat(frames, ignore_index=True, sort=False) if len(frames) > 1 else frames[0]
-    bill = parsing.normalize(raw, json.loads(overrides_json))
+    bill = parsing.normalize(raw, overrides)
     summary = analytics.summarize(bill, anomaly_threshold=threshold)
     audit = rules.run_rules(bill, summary, lang, disabled=set(disabled))
     return bill, summary, audit
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
-def build_exports(key: str, _bill, _summary, _audit, lang: str, ai_text: str | None):
-    """``key`` drives the cache; underscored args are not hashed."""
-    return {
-        "pdf": report.to_pdf(_bill, _summary, _audit, lang, ai_text),
-        "xlsx": report.to_excel(_bill, _summary, _audit, lang, ai_text),
-        "md": report.to_markdown(_bill, _summary, _audit, lang, ai_text),
-    }
+def session_cached(slot: str, key: str, fn):
+    """Cache a result in *this user's* session only.
+
+    Deliberately not ``st.cache_data``: that cache is shared by every visitor
+    of the server, so bills would stay in memory across users."""
+    entry = st.session_state.get(slot)
+    if entry is None or entry[0] != key:
+        entry = (key, fn())
+        st.session_state[slot] = entry
+    return entry[1]
+
+
+def clear_session():
+    for k in ("files", "_analysis", "_exports"):
+        st.session_state.pop(k, None)
+    st.session_state["ai_text"] = {}
+    st.session_state["chat"] = {}
+    # A new key gives a fresh, empty uploader widget (and drops the old file from memory).
+    st.session_state["uploader_gen"] = st.session_state.get("uploader_gen", 0) + 1
+
+
+def upgrade_cta(lang: str, where=st):
+    if cfg.buy_url:
+        label = tr("buy_btn", lang) + (f" — {cfg.price_label}" if cfg.price_label else "")
+        where.link_button(label, cfg.buy_url, type="primary")
+
+
+cfg = licensing.Config.from_mapping(_all_secrets())
 
 
 def ai_error_message(e: Exception, lang: str) -> str:
@@ -73,9 +93,27 @@ with st.sidebar:
     default_lang = 1 if st.query_params.get("lang", "").lower() in ("ar", "arabic") else 0
     lang = st.selectbox("🌐 Language / اللغة", LANGUAGES, index=default_lang, key="lang")
 
+    plan = licensing.PRO
+    if cfg.monetized:
+        st.subheader(f"⭐ {tr('sb_plan', lang)}")
+        code = st.text_input(tr("code_label", lang), type="password", key="access_code")
+        plan = licensing.plan_for(code, cfg)
+        if plan == licensing.PRO:
+            st.success(tr("plan_pro", lang))
+        else:
+            if code:
+                st.error(tr("code_bad", lang))
+            st.info(f"**{tr('plan_free', lang)}** — {tr('pro_perks', lang)}")
+            upgrade_cta(lang)
+    is_pro = plan == licensing.PRO
+
     st.subheader(f"🤖 {tr('sb_ai', lang)}")
-    api_key = st.text_input(tr("api_label", lang), type="password", help=tr("api_help", lang)) \
-        or _secret("GEMINI_API_KEY")
+    user_key = st.text_input(tr("api_label", lang), type="password", help=tr("api_help", lang))
+    owner_key = str(_all_secrets().get("GEMINI_API_KEY", "") or "")
+    # The owner's key (from secrets) is a paid perk and rate-limited per session;
+    # a visitor's own key is always allowed and unlimited.
+    using_owner_key = not user_key and bool(owner_key) and is_pro
+    api_key = user_key or (owner_key if using_owner_key else "")
     st.markdown(f"[{tr('api_link', lang)} ↗](https://aistudio.google.com/app/apikey)")
     model = st.selectbox(tr("model_label", lang), ai.MODELS, index=0)
 
@@ -116,11 +154,13 @@ ss = st.session_state
 ss.setdefault("files", None)        # tuple[(name, bytes)]
 ss.setdefault("ai_text", {})        # {analysis_key: text}
 ss.setdefault("chat", {})           # {analysis_key: [messages]}
+ss.setdefault("ai_used", 0)         # AI requests made with the owner's key this session
 
 tab_up, tab_sample = st.tabs([tr("tab_upload", lang), tr("tab_sample", lang)])
 with tab_up:
     uploads = st.file_uploader(tr("uploader_label", lang), type=parsing.SUPPORTED_EXTENSIONS,
-                               accept_multiple_files=True, help=tr("uploader_help", lang))
+                               accept_multiple_files=True, help=tr("uploader_help", lang),
+                               key=f"uploader_{ss.get('uploader_gen', 0)}")
     if uploads:
         files = tuple((u.name, u.getvalue()) for u in uploads)
         if files != ss.files:
@@ -138,30 +178,38 @@ if not ss.files:
     st.divider()
     st.subheader(tr("b2b_header", lang))
     st.write(tr("b2b_text", lang))
-    st.info(f"{tr('b2b_contact', lang)} support@cloudauditor.com")
+    st.info(f"{tr('b2b_contact', lang)} {cfg.contact_email}")
     st.stop()
 
 names = ", ".join(n for n, _ in ss.files)
 overrides = {f: ss.get(f"map_{f}") for f in MAP_FIELDS if ss.get(f"map_{f}") not in (None, tr("auto", lang))}
+digest = hashlib.sha1(b"".join(d for _, d in ss.files)).hexdigest()[:12]
+analysis_key = f"{digest}|{json.dumps(overrides, sort_keys=True)}|{lang}|{disabled}|{sensitivity}"
 
 try:
     with st.spinner("…"):
-        bill, summary, audit = analyze(ss.files, json.dumps(overrides, sort_keys=True), lang,
-                                       disabled, sensitivity)
+        bill, summary, audit = session_cached(
+            "_analysis", analysis_key,
+            lambda: analyze(ss.files, overrides, lang, disabled, sensitivity))
 except Exception as e:  # noqa: BLE001
     st.error(f"{tr('error_read', lang)} ({names}): {e}")
     if st.button(tr("clear", lang)):
-        ss.files = None
+        clear_session()
         st.rerun()
     st.stop()
 
-digest = hashlib.sha1(b"".join(d for _, d in ss.files)).hexdigest()[:12]
-analysis_key = f"{digest}|{json.dumps(overrides, sort_keys=True)}|{lang}|{disabled}|{sensitivity}"
+if not is_pro and summary.line_items > cfg.free_max_line_items:
+    st.warning(tr("locked_size", lang, n=cfg.free_max_line_items, m=summary.line_items))
+    upgrade_cta(lang)
+    if st.button(tr("clear", lang)):
+        clear_session()
+        st.rerun()
+    st.stop()
 
 top = st.columns([4, 1])
 top[0].markdown(f"**{tr('provider', lang)}:** {bill.provider_label} · `{names}`")
 if top[1].button(f"🗑️ {tr('clear', lang)}", width="stretch"):
-    ss.files = None
+    clear_session()
     st.rerun()
 
 with st.expander(tr("mapping", lang)):
@@ -191,6 +239,7 @@ k[5].metric(tr("kpi_untagged", lang), f"{s.untagged_pct:.0f}%" if s.untagged_pct
 if s.period_start is not None:
     st.caption(f"{tr('kpi_period', lang)}: {s.period_start:%Y-%m-%d} → {s.period_end:%Y-%m-%d} "
                f"({s.days}d) · {s.line_items:,} {tr('line_items', lang)} · {s.services} services")
+st.caption(tr("disclaimer", lang))
 
 tabs = st.tabs([tr(x, lang) for x in
                 ("t_overview", "t_savings", "t_anomalies", "t_explorer", "t_ai", "t_chat", "t_export")])
@@ -247,7 +296,9 @@ with tabs[1]:
         if fig:
             st.plotly_chart(fig, width="stretch")
 
-        for f in a.findings:
+        visible = a.findings if is_pro else a.findings[:cfg.free_findings]
+        locked = [] if is_pro else a.findings[cfg.free_findings:]
+        for f in visible:
             head = f"{SEV_ICON[f.severity]} **{f.title}** — {tr('est_savings', lang)}: **{money(f.savings)}**"
             with st.expander(head, expanded=f.severity == "high"):
                 m = st.columns(4)
@@ -260,6 +311,11 @@ with tabs[1]:
                     st.markdown(f"**{tr('top_resources', lang)}:**")
                     st.markdown("\n".join(f"- `{e}`" for e in f.examples))
 
+        if locked:
+            st.warning(tr("locked_findings", lang, n=len(locked), amount=money(sum(f.savings for f in locked))))
+            upgrade_cta(lang)
+
+    if a.findings and is_pro:
         st.subheader(tr("top_lines", lang))
         rule_title = {r.id: r.title[lang] for r in rules.RULES}
         lines = (bill.df.drop(columns=["text", "tagged"])
@@ -342,42 +398,60 @@ with tabs[3]:
                        "filtered_line_items.csv", "text/csv")
 
 # ---------------------------------------------------------------------------
-# AI report
+# AI report & chat
 # ---------------------------------------------------------------------------
 context = ai.build_context(bill, s, a)
+ai_limit = cfg.ai_requests_per_session
+
+
+def ai_blocked() -> str | None:
+    """Return a message if AI can't be used right now, else None."""
+    if not api_key:
+        return tr("ai_need_key", lang) if is_pro else tr("ai_own_key", lang)
+    if using_owner_key and ss.ai_used >= ai_limit:
+        return tr("ai_limit", lang, n=ai_limit)
+    return None
+
+
+def ai_quota_note(where=st):
+    if using_owner_key:
+        where.caption(tr("ai_remaining", lang, n=max(ai_limit - ss.ai_used, 0)))
+
 
 with tabs[4]:
     st.caption(tr("ai_intro", lang))
-    if not api_key:
-        st.warning(tr("ai_need_key", lang))
-    else:
-        existing = ss.ai_text.get(analysis_key)
-        if st.button(tr("ai_regen" if existing else "ai_btn", lang), type="primary"):
-            try:
-                text = st.write_stream(ai.stream_report(api_key, context, lang, model))
-                ss.ai_text[analysis_key] = text if isinstance(text, str) else "".join(map(str, text))
-            except Exception as e:  # noqa: BLE001
-                st.error(ai_error_message(e, lang))
-        elif existing:
-            st.markdown(existing)
+    existing = ss.ai_text.get(analysis_key)
+    blocked = ai_blocked()
+    if blocked:
+        st.warning(blocked)
+    elif st.button(tr("ai_regen" if existing else "ai_btn", lang), type="primary"):
+        ss.ai_used += 1 if using_owner_key else 0
+        try:
+            text = st.write_stream(ai.stream_report(api_key, context, lang, model))
+            existing = text if isinstance(text, str) else "".join(map(str, text))
+            ss.ai_text[analysis_key] = existing
+            existing = None  # already shown by write_stream
+        except Exception as e:  # noqa: BLE001
+            st.error(ai_error_message(e, lang))
+    if existing:
+        st.markdown(existing)
+    ai_quota_note()
 
-# ---------------------------------------------------------------------------
-# Chat
-# ---------------------------------------------------------------------------
 with tabs[5]:
-    if not api_key:
-        st.warning(tr("ai_need_key", lang))
+    history = ss.chat.setdefault(analysis_key, [])
+    chat_box = st.container(height=480)
+    for m in history:
+        chat_box.chat_message(m["role"]).markdown(m["content"])
+    blocked = ai_blocked()
+    if blocked:
+        st.warning(blocked)
     else:
-        history = ss.chat.setdefault(analysis_key, [])
-        chat_box = st.container(height=480)
-        for m in history:
-            chat_box.chat_message(m["role"]).markdown(m["content"])
-
         suggestion = st.pills("💡", tr("chat_suggestions", lang), key=f"pill_{len(history)}",
                               label_visibility="collapsed")
         typed = st.chat_input(tr("chat_placeholder", lang))
         question = typed or suggestion
         if question:
+            ss.ai_used += 1 if using_owner_key else 0
             history.append({"role": "user", "content": question})
             chat_box.chat_message("user").markdown(question)
             with chat_box.chat_message("assistant"):
@@ -388,31 +462,41 @@ with tabs[5]:
                 except Exception as e:  # noqa: BLE001
                     history.pop()
                     st.error(ai_error_message(e, lang))
-        if history and st.button(tr("chat_clear", lang)):
-            ss.chat[analysis_key] = []
-            st.rerun()
+        ai_quota_note()
+    if history and st.button(tr("chat_clear", lang)):
+        ss.chat[analysis_key] = []
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
 with tabs[6]:
-    st.caption(tr("exp_intro", lang))
-    ai_text = ss.ai_text.get(analysis_key)
-    exp = build_exports(f"{analysis_key}|{hash(ai_text)}", bill, s, a, lang, ai_text)
-    c = st.columns(4)
-    c[0].download_button(tr("exp_pdf", lang), exp["pdf"], "cloud_bill_audit.pdf", "application/pdf",
-                         width="stretch", type="primary")
-    c[1].download_button(tr("exp_xlsx", lang), exp["xlsx"], "cloud_bill_audit.xlsx",
-                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                         width="stretch")
-    c[2].download_button(tr("exp_md", lang), exp["md"].encode("utf-8"), "cloud_bill_audit.md",
-                         "text/markdown", width="stretch")
-    lines_csv = (bill.df.drop(columns=["text"]).assign(estimated_savings=a.row_savings, rule=a.row_rule)
-                 .to_csv(index=False).encode("utf-8-sig"))
-    c[3].download_button(tr("exp_csv", lang), lines_csv, "line_items_with_savings.csv", "text/csv",
-                         width="stretch")
-    with st.expander("Markdown preview"):
-        st.markdown(exp["md"])
+    if not is_pro:
+        st.warning(tr("locked_exports", lang))
+        st.info(tr("pro_perks", lang))
+        upgrade_cta(lang)
+    else:
+        st.caption(tr("exp_intro", lang))
+        ai_text = ss.ai_text.get(analysis_key)
+        exp = session_cached("_exports", f"{analysis_key}|{hash(ai_text)}", lambda: {
+            "pdf": report.to_pdf(bill, s, a, lang, ai_text),
+            "xlsx": report.to_excel(bill, s, a, lang, ai_text),
+            "md": report.to_markdown(bill, s, a, lang, ai_text),
+        })
+        c = st.columns(4)
+        c[0].download_button(tr("exp_pdf", lang), exp["pdf"], "cloud_bill_audit.pdf", "application/pdf",
+                             width="stretch", type="primary")
+        c[1].download_button(tr("exp_xlsx", lang), exp["xlsx"], "cloud_bill_audit.xlsx",
+                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             width="stretch")
+        c[2].download_button(tr("exp_md", lang), exp["md"].encode("utf-8"), "cloud_bill_audit.md",
+                             "text/markdown", width="stretch")
+        lines_csv = (bill.df.drop(columns=["text"]).assign(estimated_savings=a.row_savings, rule=a.row_rule)
+                     .to_csv(index=False).encode("utf-8-sig"))
+        c[3].download_button(tr("exp_csv", lang), lines_csv, "line_items_with_savings.csv", "text/csv",
+                             width="stretch")
+        with st.expander("Markdown preview"):
+            st.markdown(exp["md"])
 
 # ---------------------------------------------------------------------------
 # Footer
@@ -420,4 +504,6 @@ with tabs[6]:
 st.divider()
 st.subheader(tr("b2b_header", lang))
 st.write(tr("b2b_text", lang))
-st.info(f"{tr('b2b_contact', lang)} support@cloudauditor.com")
+st.info(f"{tr('b2b_contact', lang)} {cfg.contact_email}")
+st.caption(f"[{tr('terms', lang)}]({REPO_URL}/TERMS.md) · [{tr('privacy_link', lang)}]({REPO_URL}/PRIVACY.md) · "
+           f"© Cloud Bill Auditor v{__version__}")

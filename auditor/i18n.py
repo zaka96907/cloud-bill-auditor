@@ -21,10 +21,13 @@ _T = {
     "sensitivity_label": ("Anomaly sensitivity", "حساسية كشف الانحرافات"),
     "sensitivity_help": ("Lower = more anomalies flagged.", "قيمة أقل = عدد أكبر من الانحرافات."),
     "rules_label": ("Active rules", "القواعد المفعّلة"),
-    "privacy": ("🔒 Your bill is processed in memory and never stored. Only an aggregated summary "
-                "(not the raw file) is sent to Gemini, and only when you ask for AI analysis.",
-                "🔒 تتم معالجة الفاتورة في الذاكرة ولا يتم حفظها. يُرسل ملخص مجمّع فقط (وليس الملف الخام) "
-                "إلى Gemini، وفقط عند طلب التحليل بالذكاء الاصطناعي."),
+    "privacy": ("🔒 Your bill is processed in memory for your browser session only — it is never written "
+                "to disk or shared with other users, and it is discarded when you press Clear or close the tab. "
+                "Only an aggregated summary (not the raw file) is sent to Google Gemini, and only when you "
+                "request AI analysis.",
+                "🔒 تتم معالجة الفاتورة في الذاكرة لجلستك فقط — لا تُحفظ على القرص ولا تُشارك مع مستخدمين آخرين، "
+                "وتُحذف عند الضغط على مسح أو إغلاق الصفحة. يُرسل ملخص مجمّع فقط (وليس الملف الخام) إلى "
+                "Google Gemini، وفقط عند طلب التحليل بالذكاء الاصطناعي."),
     # --- input -------------------------------------------------------------
     "tab_upload": ("📤 Upload bill", "📤 رفع الفاتورة"),
     "tab_sample": ("🧪 Try a sample", "🧪 جرّب فاتورة تجريبية"),
@@ -144,6 +147,40 @@ _T = {
     "exp_xlsx": ("📊 Excel workbook", "📊 ملف Excel"),
     "exp_md": ("📝 Markdown", "📝 Markdown"),
     "exp_csv": ("🧾 Line items + savings (CSV)", "🧾 البنود مع التوفير (CSV)"),
+    # --- disclaimer / legal ----------------------------------------------------
+    "disclaimer": ("ℹ️ Savings are estimates based on common FinOps benchmarks and the text of your bill, "
+                   "not on your actual utilization metrics or negotiated prices. Validate each change before "
+                   "acting. This is not financial advice.",
+                   "ℹ️ أرقام التوفير تقديرية مبنية على معايير FinOps الشائعة ومحتوى الفاتورة، وليست على مقاييس "
+                   "الاستخدام الفعلية أو أسعارك المتفاوض عليها. تحقق من كل تغيير قبل تنفيذه. هذه ليست استشارة مالية."),
+    "terms": ("Terms", "الشروط"),
+    "privacy_link": ("Privacy", "الخصوصية"),
+    # --- plans -----------------------------------------------------------------
+    "sb_plan": ("Plan", "الخطة"),
+    "plan_free": ("Free plan", "الخطة المجانية"),
+    "plan_pro": ("Pro plan ✅", "الخطة الاحترافية ✅"),
+    "code_label": ("Access code", "رمز التفعيل"),
+    "code_bad": ("Invalid access code.", "رمز التفعيل غير صحيح."),
+    "code_ok": ("Pro unlocked. Thank you!", "تم تفعيل الخطة الاحترافية. شكراً لك!"),
+    "buy_btn": ("⭐ Upgrade to Pro", "⭐ الترقية إلى الخطة الاحترافية"),
+    "pro_perks": ("Pro unlocks: all savings findings, PDF/Excel/CSV exports, the AI report & chat without "
+                  "your own key, and bills of any size.",
+                  "الخطة الاحترافية تفتح: جميع فرص التوفير، تصدير PDF و Excel و CSV، تقرير ومحادثة الذكاء "
+                  "الاصطناعي بدون مفتاحك الخاص، وفواتير بأي حجم."),
+    "locked_findings": ("🔒 {n} more opportunities worth {amount} are available on the Pro plan.",
+                        "🔒 {n} فرص توفير إضافية بقيمة {amount} متاحة في الخطة الاحترافية."),
+    "locked_exports": ("🔒 Report exports are a Pro feature.", "🔒 تصدير التقارير متاح في الخطة الاحترافية."),
+    "locked_size": ("🔒 The free plan analyzes bills up to {n:,} line items (this one has {m:,}). "
+                    "Upgrade to Pro to analyze it.",
+                    "🔒 الخطة المجانية تحلل فواتير حتى {n:,} بند (هذه الفاتورة فيها {m:,}). "
+                    "قم بالترقية لتحليلها."),
+    "ai_own_key": ("On the free plan, add your own free Gemini key in the sidebar to use AI features.",
+                   "في الخطة المجانية، أضف مفتاح Gemini المجاني الخاص بك في الشريط الجانبي لاستخدام الذكاء الاصطناعي."),
+    "ai_limit": ("You've reached the AI limit for this session ({n} requests). Add your own Gemini key in "
+                 "the sidebar to continue without limits.",
+                 "وصلت إلى حد طلبات الذكاء الاصطناعي لهذه الجلسة ({n} طلبات). أضف مفتاح Gemini الخاص بك "
+                 "في الشريط الجانبي للمتابعة بلا حدود."),
+    "ai_remaining": ("{n} AI requests left this session.", "متبقٍ {n} طلبات ذكاء اصطناعي في هذه الجلسة."),
     # --- footer ----------------------------------------------------------------
     "b2b_header": ("💼 B2B & Enterprise services", "💼 خدمات الشركات والأعمال (B2B)"),
     "b2b_text": ("Need deeper cloud cost reduction? Our expert team provides end-to-end cloud audit consulting.",

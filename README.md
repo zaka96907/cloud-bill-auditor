@@ -65,7 +65,7 @@
 
 ### 🛠️ للمطورين
 - واجهة سطر أوامر (CLI) وبوابة CI: `python -m auditor bill.csv --pdf report.pdf --fail-over 500`
-- 28 اختباراً آلياً و GitHub Actions على Python 3.11–3.13.
+- 40 اختباراً آلياً و GitHub Actions على Python 3.11–3.13.
 
 ---
 
@@ -93,6 +93,32 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
+## 💳 البيع (الخطة المجانية والاحترافية)
+
+التطبيق جاهز للبيع بدون خادم إضافي، بنظام **رموز تفعيل**:
+
+| | مجاني | احترافي (Pro) |
+|---|---|---|
+| لوحة التحكم والرسوم والانحرافات | ✅ | ✅ |
+| فرص التوفير | أول 3 بالتفصيل | كلها |
+| تصدير PDF و Excel و CSV | 🔒 | ✅ |
+| الذكاء الاصطناعي | بمفتاح المستخدم فقط | بمفتاحك (بحد لكل جلسة) أو مفتاحه |
+| حجم الفاتورة | حتى 50,000 بند | بلا حد |
+
+**خطوات التفعيل:**
+1. أنشئ رابط دفع (Stripe Payment Link أو Lemon Squeezy أو Gumroad أو PayPal).
+2. ولّد رموز تفعيل:
+   ```bash
+   python -m auditor.licensing new-code 10
+   ```
+   أعطِ **CODE** للعميل بعد الدفع، وضع **HASH** في الإعدادات السرية.
+3. في Streamlit Cloud ← App settings ← Secrets، الصق محتوى `.streamlit/secrets.toml.example` مع قيمك (`PRO_ACCESS_CODES` و `BUY_URL` و `PRICE_LABEL` و `GEMINI_API_KEY` و `CONTACT_EMAIL`).
+4. لإلغاء عميل: احذف الـ HASH الخاص به وأعد تشغيل التطبيق.
+
+> إذا تُركت `PRO_ACCESS_CODES` فارغة، تكون كل المميزات مفتوحة للجميع.
+
+**الشروط والخصوصية:** [TERMS.md](TERMS.md) · [PRIVACY.md](PRIVACY.md) · الترخيص: [LICENSE](LICENSE) (ملكية خاصة، جميع الحقوق محفوظة).
+
 ## 🧱 البنية
 
 ```
@@ -105,6 +131,7 @@ auditor/
   ai.py                تكامل Gemini (تقرير + محادثة)
   report.py            تصدير PDF / Excel / Markdown
   samples.py           فواتير تجريبية واقعية
+  licensing.py         الخطط ورموز التفعيل وحدود الاستخدام
   i18n.py              نصوص الواجهة (عربي/إنجليزي)
   __main__.py          واجهة سطر الأوامر
 tests/                 الاختبارات
@@ -115,7 +142,7 @@ assets/fonts/          خط DejaVu Sans لدعم العربية في PDF
 
 ## English summary
 
-Cloud Bill Auditor analyzes AWS, GCP and Azure billing exports, detects waste with a 13-rule FinOps engine, quantifies **per-line-item dollar savings** (never double-counted), flags anomalies with robust statistics, forecasts month-end spend, and produces an AI-written action plan with Gemini. It exports a fully Arabic-capable PDF, a multi-sheet Excel workbook, Markdown and CSV, and ships with a CLI, tests and CI. The audit works without any API key; Gemini is only needed for the AI report and chat.
+Cloud Bill Auditor analyzes AWS, GCP and Azure billing exports, detects waste with a 13-rule FinOps engine, quantifies **per-line-item dollar savings** (never double-counted), flags anomalies with robust statistics, forecasts month-end spend, and produces an AI-written action plan with Gemini. It includes a Free/Pro plan system with access codes and a payment link, so it can be sold without a backend. It exports a fully Arabic-capable PDF, a multi-sheet Excel workbook, Markdown and CSV, and ships with a CLI, tests and CI. The audit works without any API key; Gemini is only needed for the AI report and chat.
 
 ## 💼 B2B & Enterprise
 

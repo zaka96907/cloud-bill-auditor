@@ -1,6 +1,9 @@
-streamlit
-pandas
-plotly
-openpyxl
-google-genai
-fpdf2
+streamlit>=1.50
+pandas>=2.1
+numpy>=1.26
+plotly>=5.20
+openpyxl>=3.1
+pyarrow>=14
+google-genai>=1.0
+fpdf2>=2.8
+uharfbuzz>=0.39

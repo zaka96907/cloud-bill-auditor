@@ -1,417 +1,423 @@
-import streamlit as st
+"""Cloud Bill Auditor — Streamlit UI.
+
+All analysis logic lives in the ``auditor`` package; this file only renders it.
+Run with:  streamlit run app.py
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
 import pandas as pd
-from google import genai
-from google.genai import types
-from fpdf import FPDF
-import io
-import plotly.express as px
+import streamlit as st
 
-# ---------------------------------------------------------
-# Goal 1 & Goal 3: دالة المعالجة، كشف نوع السحابة والانحرافات
-# ---------------------------------------------------------
-def process_csv_with_pandas(df):
+from auditor import __version__, ai, analytics, charts, parsing, report, rules, samples
+from auditor.i18n import AR, LANGUAGES, tr
+
+st.set_page_config(page_title="Cloud Bill Auditor", page_icon="🕵️", layout="wide",
+                   initial_sidebar_state="expanded")
+
+SEV_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡", "info": "🔵"}
+MAP_FIELDS = ["cost", "service", "date", "region", "resource", "usage", "account"]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def money(v: float | None, decimals: int = 0) -> str:
+    return "—" if v is None else f"${v:,.{decimals}f}"
+
+
+def _secret(name: str) -> str:
     try:
-        df_clean = df.copy()
-        df_clean.columns = df_clean.columns.str.strip()
-        
-        # 1. كشف نوع مزود السحابة (Multi-Cloud Detection)
-        cols_str = ' '.join(df_clean.columns).lower()
-        if 'unblendedcost' in cols_str or 'lineitem' in cols_str:
-            cloud_provider = "AWS (Amazon Web Services)"
-        elif 'project_id' in cols_str or 'credits' in cols_str or 'sku' in cols_str:
-            cloud_provider = "Google Cloud Platform (GCP)"
-        elif 'metername' in cols_str or 'subscriptionname' in cols_str or 'resourcegroup' in cols_str:
-            cloud_provider = "Microsoft Azure"
-        else:
-            cloud_provider = "Generic Cloud / Unknown Provider"
+        return st.secrets.get(name, "")
+    except Exception:  # no secrets.toml
+        return ""
 
-        # البحث عن عمود التكلفة وعمود الخدمة
-        cost_col = [c for c in df_clean.columns if any(k in c.lower() for k in ['cost', 'amount', 'unblendedcost', 'cost_usd'])]
-        service_col = [c for c in df_clean.columns if any(k in c.lower() for k in ['service', 'product', 'productcode'])]
-        
-        c_name = cost_col[0] if cost_col else df_clean.columns[-1]
-        s_name = service_col[0] if service_col else df_clean.columns[0]
-        
-        df_clean[c_name] = pd.to_numeric(df_clean[c_name], errors='coerce').fillna(0)
-        
-        total_spend = df_clean[c_name].sum()
-        top_services = df_clean.groupby(s_name)[c_name].sum().nlargest(5).reset_index().to_dict(orient='records')
-        spikes = df_clean.nlargest(3, c_name)[[s_name, c_name]].to_dict(orient='records')
-        
-        # 2. كشف الشذوذ والتكلفة المرتفعة غير الطبيعية (Anomaly Detection)
-        mean_cost = df_clean[c_name].mean()
-        std_cost = df_clean[c_name].std()
-        anomalies = []
-        
-        if std_cost > 0:
-            anomaly_df = df_clean[df_clean[c_name] > (mean_cost + 2 * std_cost)]
-            for _, row in anomaly_df.iterrows():
-                anomalies.append({
-                    "service": str(row[s_name]),
-                    "cost": float(row[c_name])
-                })
-        
-        return {
-            "total_spend": round(total_spend, 2),
-            "top_services": top_services,
-            "spikes": spikes,
-            "cost_col": c_name,
-            "service_col": s_name,
-            "cloud_provider": cloud_provider,
-            "anomalies": anomalies
-        }
-    except Exception as e:
-        return None
 
-# ---------------------------------------------------------
-# M3: دالة كشف الـ Logs المفرطة (Log Flood Detector)
-# ---------------------------------------------------------
-def detect_log_floods(df, lang="English"):
-    log_flags = []
-    try:
-        text_series = df.astype(str).fillna('').apply(lambda row: ' '.join(row.values), axis=1).str.lower()
-        log_keywords = 'cloudwatch|log-group|ingestion|putlogevents|verbose|error_loop|stdout'
-        log_mask = text_series.str.contains(log_keywords, na=False)
-        
-        if log_mask.any():
-            flood_count = int(log_mask.sum())
-            if lang == "العربية":
-                log_flags.append(f"🌊 [Log Flood Detector]: تم كشف {flood_count} من الأنشطة المتعلقة بالـ Logs المرتفعة!")
-            else:
-                log_flags.append(f"🌊 [Log Flood Detector]: Detected {flood_count} high-volume logging events!")
-    except Exception:
-        pass
-        
-    return log_flags
+@st.cache_data(show_spinner=False, max_entries=8)
+def analyze(files: tuple, overrides_json: str, lang: str, disabled: tuple, threshold: float):
+    frames = [parsing.read_file(data, name) for name, data in files]
+    raw = pd.concat(frames, ignore_index=True, sort=False) if len(frames) > 1 else frames[0]
+    bill = parsing.normalize(raw, json.loads(overrides_json))
+    summary = analytics.summarize(bill, anomaly_threshold=threshold)
+    audit = rules.run_rules(bill, summary, lang, disabled=set(disabled))
+    return bill, summary, audit
 
-# ---------------------------------------------------------
-# M4: دالة توليد الرسوم البيانية التفاعلية (Visual Cost Breakdown)
-# ---------------------------------------------------------
-def render_cost_visualizations(df, summary_info, lang="English"):
-    if not summary_info:
-        return None, None
-    
-    c_name = summary_info["cost_col"]
-    s_name = summary_info["service_col"]
-    
-    service_df = df.groupby(s_name)[c_name].sum().reset_index()
-    service_df = service_df.sort_values(by=c_name, ascending=False)
-    
-    pie_title = "توزيع التكاليف حسب الخدمة" if lang == "العربية" else "Cost Distribution by Service"
-    fig_pie = px.pie(
-        service_df, 
-        values=c_name, 
-        names=s_name, 
-        title=pie_title,
-        hole=0.4,
-        color_discrete_sequence=px.colors.qualitative.Pastel
-    )
-    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-    fig_pie.update_layout(margin=dict(t=40, b=20, l=20, r=20))
 
-    bar_title = "أعلى 5 خدمات استهلاكاً" if lang == "العربية" else "Top 5 Cost-Consuming Services"
-    top_services = service_df.head(5)
-    fig_bar = px.bar(
-        top_services, 
-        x=c_name, 
-        y=s_name, 
-        orientation='h',
-        title=bar_title,
-        text_auto='.2f',
-        color=c_name,
-        color_continuous_scale='Reds'
-    )
-    fig_bar.update_layout(
-        yaxis=dict(autorange="reversed"),
-        margin=dict(t=40, b=20, l=20, r=20),
-        coloraxis_showscale=False
-    )
-    
-    return fig_pie, fig_bar
-
-# ---------------------------------------------------------
-# Goal 2 & Goal 3: محرك القواعد البرمجية والتنبيهات
-# ---------------------------------------------------------
-def apply_finops_rules(df, summary_info=None, lang="English"):
-    flags = []
-    if df is None or df.empty:
-        return flags
-        
-    try:
-        # تحويل نصوص الجدول بأمان لتفادي أخطاء join مع القيم الفارغة
-        df_str = df.astype(str).fillna('').apply(lambda row: ' '.join(row.values), axis=1).str.lower()
-        
-        # كشف الموارد المتروكة وغير المستغلة
-        unused_mask = df_str.str.contains('unused|idle|unattached|orphan|stopped', na=False)
-        if unused_mask.any():
-            count = int(unused_mask.sum())
-            if lang == "العربية":
-                flags.append(f"⚠️ [Idle Resource Detector]: تم كشف {count} من الموارد المتروكة أو غير المستغلة!")
-            else:
-                flags.append(f"⚠️ [Idle Resource Detector]: Detected {count} idle or unattached resources!")
-                
-        # القاعدة 2: كشف النسخ الاحتياطية والتخزين
-        storage_mask = df_str.str.contains('storage|snapshot|backup', na=False)
-        if storage_mask.any():
-            if lang == "العربية":
-                flags.append("ℹ️ توجد تكاليف متكررة للنسخ الاحتياطية والتخزين قد تحتاج لمراجعة سياسة الاحتفاظ.")
-            else:
-                flags.append("ℹ️ Recurring storage/snapshot costs detected. Consider reviewing retention policies.")
-
-    except Exception:
-        pass
-
-    # دمج تنبيهات الـ Log Flooding
-    try:
-        log_flags = detect_log_floods(df, lang=lang)
-        flags.extend(log_flags)
-    except Exception:
-        pass
-
-    # القاعدة 3: كشف تركز التكلفة أكثر من 40% والشذوذ
-    if summary_info and summary_info.get('total_spend', 0) > 0:
-        for item in summary_info['top_services']:
-            service_cost = list(item.values())[1] if len(item.values()) > 1 else 0
-            if (service_cost / summary_info['total_spend']) >= 0.4:
-                service_name = list(item.values())[0]
-                if lang == "العربية":
-                    flags.append(f"🚨 تنبيه تركز التكلفة: الخدمة ({service_name}) تستهلك وحدها أكثر من 40% من إجمالي الفاتورة!")
-                else:
-                    flags.append(f"🚨 Cost Concentration Alert: Service ({service_name}) accounts for over 40% of the total bill!")
-                    
-        # تنبيه الشذوذ الانحرافي
-        if summary_info.get('anomalies'):
-            for anom in summary_info['anomalies']:
-                if lang == "العربية":
-                    flags.append(f"📈 قفزة تكلفة شاذة (Anomaly Detected): الخدمة ({anom['service']}) تكلفتها ${anom['cost']} وتتجاوز المعدل الطبيعي بشكل ملحوظ!")
-                else:
-                    flags.append(f"📈 Cost Anomaly Detected: Service ({anom['service']}) cost ${anom['cost']} which significantly deviates from normal patterns!")
-
-    return flags
-
-# ---------------------------------------------------------
-# Goal 4: دالة توليد تقرير PDF المطور والكامل
-# ---------------------------------------------------------
-def generate_pdf_report(analysis_text):
-    pdf = FPDF()
-    pdf.add_page()
-    
-    pdf.set_font("Helvetica", style="B", size=16)
-    pdf.cell(0, 10, txt="Cloud Audit & FinOps Action Plan Report", ln=1, align="C")
-    pdf.ln(10)
-    
-    pdf.set_font("Helvetica", size=10)
-    clean_text = analysis_text.encode('latin-1', 'ignore').decode('latin-1')
-    pdf.multi_cell(0, 6, txt=clean_text)
-    
-    return bytes(pdf.output())
-
-# ---------------------------------------------------------
-# إعداد قائمة اختيار اللغة في الشريط الجانبي أولاً
-# ---------------------------------------------------------
-with st.sidebar:
-    st.title("🌐 Language / اللغة")
-    lang = st.selectbox("Choose Language / اختر لغة الواجهة", ["English", "العربية"])
-    st.markdown("---")
-
-# ---------------------------------------------------------
-# نصوص الواجهة بكلتا اللغتين
-# ---------------------------------------------------------
-texts = {
-    "العربية": {
-        "dir": "rtl",
-        "align": "right",
-        "sidebar_title": "🔑 إعدادات الاتصال",
-        "api_label": "أدخل مفتاح Gemini API الخاص بك:",
-        "api_link": "الحصول على مفتاح مجاني",
-        "title": "🕵️‍♂️ مفتش الفواتير السحابية الذكي",
-        "subtitle": "اكتشف الهدر المالي واحصل على خطة توفير تنفيذية لـ AWS و GCP و Azure",
-        "uploader_label": "قم برفع ملف الفاتورة بصيغة (CSV)",
-        "sample_checkbox": "لا تملك ملفاً؟ اضغط هنا لتوليد فاتورة تجريبية وتحليلها ⚙️",
-        "sample_success": "تم توليد بيانات فاتورة تجريبية بنجاح!",
-        "btn_analyze": "🔍 بدء تحليل الفاتورة وإنشاء خطة التوفير",
-        "warning_api": "يرجى إدخال مفتاح API أولاً من الشريط الجانبي للبدء.",
-        "status_analyzing": "جاري تحليل الفاتورة وصياغة التوصيات وخطة العمل...",
-        "results_title": "📊 التقرير النهائي وخطة العمل التنفيذية (FinOps Action Plan):",
-        "rules_title": "⚡ تنبيهات محرك القواعد واكتشاف الانحرافات (FinOps Rules & Anomalies):",
-        "provider_detected": "☁️ نوع المنصة السحابية المكتشفة:",
-        "pdf_button": "📄 تحميل تقرير التوصيات وخطة العمل (PDF)",
-        "b2b_header": "💼 خدمات الشركات والأعمال (B2B)",
-        "b2b_text": "هل تريد تخفيضاً أكبر في تكاليف السحاب؟ يتوفر فريقنا المتخصص لتقديم استشارات وتدقيق شامل لشركتك.",
-        "b2b_contact": "📩 للتواصل وحجز جلسة تدقيق:",
-        "error_503": "السيرفر يعاني من ضغط حالياً، يرجى الضغط على زر التحليل مرة أخرى بعد بضع ثوانٍ."
-    },
-    "English": {
-        "dir": "ltr",
-        "align": "left",
-        "sidebar_title": "🔑 Connection Settings",
-        "api_label": "Enter your Gemini API Key:",
-        "api_link": "Get a Free Key",
-        "title": "🕵️‍♂️ Smart Cloud Bill Auditor",
-        "subtitle": "Detect financial waste & get an actionable savings plan for AWS, GCP & Azure",
-        "uploader_label": "Upload your bill file (CSV)",
-        "sample_checkbox": "Don't have a file? Click here to generate a sample bill and analyze it ⚙️",
-        "sample_success": "Sample bill data generated successfully!",
-        "btn_analyze": "🔍 Start AI Audit & Build Action Plan",
-        "warning_api": "Please enter your API Key from the sidebar first to start.",
-        "status_analyzing": "Analyzing invoice & constructing actionable optimization plan...",
-        "results_title": "📊 Final Audit Report & Action Plan:",
-        "rules_title": "⚡ Rule Engine Quick Alerts & Anomaly Detection:",
-        "provider_detected": "☁️ Detected Cloud Provider:",
-        "pdf_button": "📄 Download Complete Action Plan Report (PDF)",
-        "b2b_header": "💼 B2B & Enterprise Services",
-        "b2b_text": "Need deeper cloud cost reduction? Our expert team provides end-to-end cloud audit consulting.",
-        "b2b_contact": "📩 Contact us for an audit session:",
-        "error_503": "Google API is currently experiencing high demand. Please click Analyze again in a few seconds."
+@st.cache_data(show_spinner=False, max_entries=8)
+def build_exports(key: str, _bill, _summary, _audit, lang: str, ai_text: str | None):
+    """``key`` drives the cache; underscored args are not hashed."""
+    return {
+        "pdf": report.to_pdf(_bill, _summary, _audit, lang, ai_text),
+        "xlsx": report.to_excel(_bill, _summary, _audit, lang, ai_text),
+        "md": report.to_markdown(_bill, _summary, _audit, lang, ai_text),
     }
-}
 
-t = texts[lang]
 
-# ---------------------------------------------------------
-# بقية إعدادات الشريط الجانبي
-# ---------------------------------------------------------
+def ai_error_message(e: Exception, lang: str) -> str:
+    msg = str(e)
+    if any(c in msg for c in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "overloaded")):
+        return tr("ai_busy", lang)
+    if any(c in msg for c in ("API_KEY_INVALID", "API key not valid", "PERMISSION_DENIED", "401", "403")):
+        return tr("ai_bad_key", lang)
+    return f"{tr('ai_error', lang)}: {msg[:300]}"
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title(t["sidebar_title"])
-    api_key_input = st.text_input(t["api_label"], value="", type="password")
-    st.markdown(f"[{t['api_link']}](https://aistudio.google.com/app/apikey)")
-    api_key = api_key_input if api_key_input else st.secrets.get("GEMINI_API_KEY", "")
+    # ?lang=ar in the URL opens the app in Arabic (handy for sharing links).
+    default_lang = 1 if st.query_params.get("lang", "").lower() in ("ar", "arabic") else 0
+    lang = st.selectbox("🌐 Language / اللغة", LANGUAGES, index=default_lang, key="lang")
 
-# ---------------------------------------------------------
-# الواجهة الرئيسية
-# ---------------------------------------------------------
-st.title(t["title"])
-st.write(f"### {t['subtitle']}")
+    st.subheader(f"🤖 {tr('sb_ai', lang)}")
+    api_key = st.text_input(tr("api_label", lang), type="password", help=tr("api_help", lang)) \
+        or _secret("GEMINI_API_KEY")
+    st.markdown(f"[{tr('api_link', lang)} ↗](https://aistudio.google.com/app/apikey)")
+    model = st.selectbox(tr("model_label", lang), ai.MODELS, index=0)
 
-# دعم رفع وقراءة صيغ متعددة (CSV, XLSX, JSON)
-uploaded_file = st.file_uploader(t["uploader_label"], type=["csv", "xlsx", "json"])
+    st.subheader(f"⚙️ {tr('sb_settings', lang)}")
+    budget = st.number_input(tr("budget_label", lang), min_value=0.0, value=0.0, step=100.0)
+    sensitivity = st.slider(tr("sensitivity_label", lang), 2.0, 6.0, 3.5, 0.5,
+                            help=tr("sensitivity_help", lang))
+    rule_names = {r.id: r.title[lang] for r in rules.RULES}
+    with st.expander(tr("rules_label", lang)):
+        active = [rid for rid, name in rule_names.items() if st.checkbox(name, True, key=f"rule_{rid}")]
+    disabled = tuple(sorted(set(rule_names) - set(active)))
 
-df = None
+    st.caption(tr("privacy", lang))
+    st.caption(f"v{__version__}")
 
-def load_data(file):
-    if file is None:
-        return None
-    try:
-        filename = file.name.lower()
-        if filename.endswith('.csv'):
-            return pd.read_csv(file)
-        elif filename.endswith('.xlsx'):
-            return pd.read_excel(file)
-        elif filename.endswith('.json'):
-            return pd.read_json(file)
-    except Exception as e:
-        st.error(f"Error reading file / خطأ في قراءة الملف: {e}")
-        return None
+# Right-to-left layout for Arabic (charts, tables and code stay LTR).
+if lang == AR:
+    st.markdown("""
+<style>
+[data-testid="stMain"], [data-testid="stSidebar"], [data-testid="stChatMessage"] {direction: rtl; text-align: right;}
+[data-testid="stMetric"], .stMarkdown, .stAlert, label {direction: rtl; text-align: right;}
+.js-plotly-plot, [data-testid="stDataFrame"], code, pre, [data-baseweb="slider"] {direction: ltr; text-align: left;}
+</style>""", unsafe_allow_html=True)
 
-if uploaded_file is not None:
-    df = load_data(uploaded_file)
-    if df is not None:
-        st.dataframe(df.head())
+st.markdown("""
+<style>
+[data-testid="stMetric"] {background: rgba(37,99,235,.04); border-radius: 12px; padding: 12px 16px;}
+[data-testid="stMetricValue"] {font-size: 1.7rem;}
+</style>""", unsafe_allow_html=True)
 
-use_sample = st.checkbox(t["sample_checkbox"])
+# ---------------------------------------------------------------------------
+# Header & input
+# ---------------------------------------------------------------------------
+st.title(f"🕵️ {tr('app_title', lang)}")
+st.caption(tr("app_subtitle", lang))
 
-if use_sample and df is None:
-    sample_data = {
-        "Service": ["Compute Engine", "Cloud Storage", "BigQuery", "Cloud SQL"],
-        "Cost_USD": [1200.50, 450.00, 890.20, 310.00],
-        "Usage_Type": ["N1-standard-8 (Unused 80%)", "Standard Storage", "Analysis Queries", "db-custom-4-16000"],
-        "Region": ["us-central1", "us-east1", "us-central1", "europe-west1"]
-    }
-    df = pd.DataFrame(sample_data)
-    st.success(t["sample_success"])
-    st.dataframe(df)
+ss = st.session_state
+ss.setdefault("files", None)        # tuple[(name, bytes)]
+ss.setdefault("ai_text", {})        # {analysis_key: text}
+ss.setdefault("chat", {})           # {analysis_key: [messages]}
 
-if df is not None:
-    if st.button(t["btn_analyze"]):
-        if not api_key:
-            st.warning(t["warning_api"])
+tab_up, tab_sample = st.tabs([tr("tab_upload", lang), tr("tab_sample", lang)])
+with tab_up:
+    uploads = st.file_uploader(tr("uploader_label", lang), type=parsing.SUPPORTED_EXTENSIONS,
+                               accept_multiple_files=True, help=tr("uploader_help", lang))
+    if uploads:
+        files = tuple((u.name, u.getvalue()) for u in uploads)
+        if files != ss.files:
+            ss.files = files
+with tab_sample:
+    c1, c2 = st.columns([1, 2])
+    provider = c1.radio(tr("sample_provider", lang), ["AWS", "GCP", "Azure"], horizontal=True)
+    if c2.button(tr("sample_btn", lang), type="primary"):
+        csv = samples.generate(provider).to_csv(index=False).encode()
+        ss.files = ((f"sample_{provider.lower()}_bill.csv", csv),)
+        st.success(tr("sample_ok", lang))
+
+if not ss.files:
+    st.info(tr("empty_state", lang))
+    st.divider()
+    st.subheader(tr("b2b_header", lang))
+    st.write(tr("b2b_text", lang))
+    st.info(f"{tr('b2b_contact', lang)} support@cloudauditor.com")
+    st.stop()
+
+names = ", ".join(n for n, _ in ss.files)
+overrides = {f: ss.get(f"map_{f}") for f in MAP_FIELDS if ss.get(f"map_{f}") not in (None, tr("auto", lang))}
+
+try:
+    with st.spinner("…"):
+        bill, summary, audit = analyze(ss.files, json.dumps(overrides, sort_keys=True), lang,
+                                       disabled, sensitivity)
+except Exception as e:  # noqa: BLE001
+    st.error(f"{tr('error_read', lang)} ({names}): {e}")
+    if st.button(tr("clear", lang)):
+        ss.files = None
+        st.rerun()
+    st.stop()
+
+digest = hashlib.sha1(b"".join(d for _, d in ss.files)).hexdigest()[:12]
+analysis_key = f"{digest}|{json.dumps(overrides, sort_keys=True)}|{lang}|{disabled}|{sensitivity}"
+
+top = st.columns([4, 1])
+top[0].markdown(f"**{tr('provider', lang)}:** {bill.provider_label} · `{names}`")
+if top[1].button(f"🗑️ {tr('clear', lang)}", width="stretch"):
+    ss.files = None
+    st.rerun()
+
+with st.expander(tr("mapping", lang)):
+    st.caption(tr("mapping_help", lang))
+    cols = [tr("auto", lang)] + list(bill.raw.columns)
+    detected = bill.columns.as_dict()
+    mcols = st.columns(len(MAP_FIELDS))
+    for i, f in enumerate(MAP_FIELDS):
+        mcols[i].selectbox(f"{f} → {detected.get(f, '—')}", cols, key=f"map_{f}")
+    if bill.columns.tags:
+        st.caption("Tags: " + ", ".join(bill.columns.tags))
+
+# ---------------------------------------------------------------------------
+# KPI row
+# ---------------------------------------------------------------------------
+s, a = summary, audit
+sav_pct = a.total_savings / s.total * 100 if s.total else 0
+k = st.columns(6)
+k[0].metric(tr("kpi_total", lang), money(s.total),
+            f"{s.mom_change_pct:+.1f}% {tr('vs_prev', lang)}" if s.mom_change_pct is not None else None,
+            delta_color="inverse")
+k[1].metric(tr("kpi_savings", lang), money(a.total_savings), f"{sav_pct:.1f}% {tr('of_bill', lang)}")
+k[2].metric(tr("kpi_forecast", lang), money(s.forecast_month_end))
+k[3].metric(tr("kpi_runrate", lang), money(s.run_rate_monthly))
+k[4].metric(tr("kpi_anomalies", lang), len(s.anomalies))
+k[5].metric(tr("kpi_untagged", lang), f"{s.untagged_pct:.0f}%" if s.untagged_pct is not None else "—")
+if s.period_start is not None:
+    st.caption(f"{tr('kpi_period', lang)}: {s.period_start:%Y-%m-%d} → {s.period_end:%Y-%m-%d} "
+               f"({s.days}d) · {s.line_items:,} {tr('line_items', lang)} · {s.services} services")
+
+tabs = st.tabs([tr(x, lang) for x in
+                ("t_overview", "t_savings", "t_anomalies", "t_explorer", "t_ai", "t_chat", "t_export")])
+other = tr("other", lang)
+
+# ---------------------------------------------------------------------------
+# Overview
+# ---------------------------------------------------------------------------
+with tabs[0]:
+    labels = {"daily": tr("l_daily", lang), "avg7": tr("l_avg7", lang), "anomaly": tr("l_anomaly", lang)}
+    fig = charts.daily_trend(s, tr("c_daily", lang), labels)
+    if fig:
+        if budget > 0 and s.forecast_month_end:
+            c1, c2 = st.columns([3, 1])
+            c1.plotly_chart(fig, width="stretch")
+            c2.plotly_chart(charts.budget_gauge(s.forecast_month_end, budget, tr("c_budget", lang)),
+                            width="stretch")
+            if s.forecast_month_end > budget:
+                c2.error(tr("budget_over", lang, amount=money(s.forecast_month_end - budget)))
+            else:
+                c2.success(tr("budget_ok", lang, pct=s.forecast_month_end / budget * 100))
         else:
-            # 1. المعالجة الإحصائية وكشف نوع السحابة (Goal 1 & 3)
-            summary = process_csv_with_pandas(df)
-            
-            # عرض المزود المكتشف
-            if summary and summary.get("cloud_provider"):
-                st.info(f"{t['provider_detected']} **{summary['cloud_provider']}**")
-                
-            # عرض الرسوم البيانية التفاعلية
-            fig_pie, fig_bar = render_cost_visualizations(df, summary, lang=lang)
-            if fig_pie and fig_bar:
-                st.subheader("📊 التحليل البصري للتكاليف" if lang == "العربية" else "📊 Visual Cost Breakdown")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                with col2:
-                    st.plotly_chart(fig_bar, use_container_width=True)
-                    
-            # 2. القواعد البرمجية واكتشاف الشذوذ (Goal 2 & 3)
-            rule_flags = apply_finops_rules(df, summary_info=summary, lang=lang)
-            
-            if rule_flags:
-                st.subheader(t["rules_title"])
-                for flag in rule_flags:
-                    st.warning(flag)
+            st.plotly_chart(fig, width="stretch")
+    else:
+        st.info(tr("no_dates", lang))
 
-            with st.spinner(t["status_analyzing"]):
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(charts.service_donut(s, tr("c_donut", lang), other), width="stretch")
+    c2.plotly_chart(charts.top_services_bar(s, tr("c_top", lang)), width="stretch")
+
+    fig = charts.service_trend(bill.df, tr("c_stack", lang), other=other)
+    if fig:
+        st.plotly_chart(fig, width="stretch")
+    c1, c2 = st.columns(2)
+    fig = charts.region_bar(s, tr("c_region", lang))
+    if fig:
+        c1.plotly_chart(fig, width="stretch")
+    fig = charts.treemap(bill.df, tr("c_tree", lang))
+    if fig:
+        (c2 if charts.region_bar(s, "") else st).plotly_chart(fig, width="stretch")
+
+# ---------------------------------------------------------------------------
+# Savings plan
+# ---------------------------------------------------------------------------
+with tabs[1]:
+    if not a.findings:
+        st.success(tr("sav_none", lang))
+    else:
+        st.subheader(tr("sav_header", lang, n=len(a.findings), amount=money(a.total_savings), pct=sav_pct))
+        st.caption(tr("sav_note", lang))
+        fig = charts.savings_waterfall(s.total, a, tr("c_waterfall", lang),
+                                       {"current": tr("l_current", lang), "optimized": tr("l_optimized", lang)},
+                                       lang)
+        if fig:
+            st.plotly_chart(fig, width="stretch")
+
+        for f in a.findings:
+            head = f"{SEV_ICON[f.severity]} **{f.title}** — {tr('est_savings', lang)}: **{money(f.savings)}**"
+            with st.expander(head, expanded=f.severity == "high"):
+                m = st.columns(4)
+                m[0].metric(tr("severity", lang), tr(f"sev_{f.severity}", lang))
+                m[1].metric(tr("confidence", lang), tr(f"sev_{f.confidence}", lang))
+                m[2].metric(tr("affected", lang), money(f.affected_cost))
+                m[3].metric(tr("line_items", lang), f.rows)
+                st.markdown(f"**{tr('action', lang)}:** {f.action}")
+                if f.examples:
+                    st.markdown(f"**{tr('top_resources', lang)}:**")
+                    st.markdown("\n".join(f"- `{e}`" for e in f.examples))
+
+        st.subheader(tr("top_lines", lang))
+        rule_title = {r.id: r.title[lang] for r in rules.RULES}
+        lines = (bill.df.drop(columns=["text", "tagged"])
+                 .assign(savings=a.row_savings, rule=a.row_rule.map(rule_title).fillna(""))
+                 .query("savings > 0").sort_values("savings", ascending=False).head(200))
+        st.dataframe(lines, width="stretch", hide_index=True, column_config={
+            "cost": st.column_config.NumberColumn(format="$%.2f"),
+            "savings": st.column_config.ProgressColumn(format="$%.2f", min_value=0,
+                                                       max_value=float(lines["savings"].max() or 1)),
+            "date": st.column_config.DateColumn(),
+        })
+
+# ---------------------------------------------------------------------------
+# Anomalies & governance
+# ---------------------------------------------------------------------------
+with tabs[2]:
+    if not a.insights and not s.anomalies:
+        st.success(tr("an_none", lang))
+    for i in a.insights:
+        box = st.error if i.severity == "high" else st.warning
+        box(f"{SEV_ICON[i.severity]} **{i.title}**\n\n{i.action}")
+    if s.anomalies:
+        st.subheader(tr("an_table", lang))
+        st.dataframe(pd.DataFrame([{
+            "type": tr(f"an_kind_{x.kind}", lang), "when / what": x.label, "service": x.service,
+            "cost": x.cost, "expected": x.expected, "excess": x.excess, "score": round(x.score, 1),
+        } for x in s.anomalies]), width="stretch", hide_index=True, column_config={
+            "cost": st.column_config.NumberColumn(format="$%.2f"),
+            "expected": st.column_config.NumberColumn(format="$%.2f"),
+            "excess": st.column_config.NumberColumn(format="$%.2f"),
+        })
+    if bill.warnings:
+        with st.expander(tr("warnings", lang)):
+            for w in bill.warnings:
+                st.write("• " + w)
+
+# ---------------------------------------------------------------------------
+# Explorer
+# ---------------------------------------------------------------------------
+with tabs[3]:
+    df = bill.df.assign(savings=a.row_savings)
+    c1, c2, c3 = st.columns(3)
+    svc = c1.multiselect(tr("ex_service", lang), sorted(df["service"].unique()))
+    reg = c2.multiselect(tr("ex_region", lang), sorted(df["region"].unique()))
+    accts = sorted(x for x in df["account"].unique() if x)
+    acc = c3.multiselect(tr("ex_account", lang), accts) if accts else []
+    c1, c2, c3 = st.columns([2, 2, 1])
+    q = c1.text_input(tr("ex_search", lang))
+    rng = None
+    if bill.has_dates:
+        dmin, dmax = df["date"].min().date(), df["date"].max().date()
+        rng = c2.date_input(tr("ex_dates", lang), (dmin, dmax), min_value=dmin, max_value=dmax)
+    group = c3.selectbox(tr("ex_group", lang), ["service", "region", "account", "resource", "usage"])
+
+    f = df
+    if svc:
+        f = f[f["service"].isin(svc)]
+    if reg:
+        f = f[f["region"].isin(reg)]
+    if acc:
+        f = f[f["account"].isin(acc)]
+    if q:
+        f = f[f["text"].str.contains(q.lower(), regex=False, na=False)
+              | f["service"].str.lower().str.contains(q.lower(), regex=False)]
+    if rng and isinstance(rng, (list, tuple)) and len(rng) == 2:
+        f = f[(f["date"] >= pd.Timestamp(rng[0])) & (f["date"] <= pd.Timestamp(rng[1]))]
+
+    st.caption(tr("ex_rows", lang, n=f"{len(f):,}", amount=money(f["cost"].sum(), 2)))
+    pivot = (f.groupby(group)[["cost", "savings"]].sum().sort_values("cost", ascending=False)
+             .reset_index().head(100))
+    st.dataframe(pivot, width="stretch", hide_index=True, column_config={
+        "cost": st.column_config.NumberColumn(format="$%.2f"),
+        "savings": st.column_config.NumberColumn(format="$%.2f")})
+    view = f.drop(columns=["text"]).sort_values("cost", ascending=False)
+    st.dataframe(view.head(5000), width="stretch", hide_index=True, column_config={
+        "cost": st.column_config.NumberColumn(format="$%.4f"),
+        "savings": st.column_config.NumberColumn(format="$%.4f"),
+        "date": st.column_config.DateColumn()})
+    st.download_button(tr("ex_dl", lang), view.to_csv(index=False).encode("utf-8-sig"),
+                       "filtered_line_items.csv", "text/csv")
+
+# ---------------------------------------------------------------------------
+# AI report
+# ---------------------------------------------------------------------------
+context = ai.build_context(bill, s, a)
+
+with tabs[4]:
+    st.caption(tr("ai_intro", lang))
+    if not api_key:
+        st.warning(tr("ai_need_key", lang))
+    else:
+        existing = ss.ai_text.get(analysis_key)
+        if st.button(tr("ai_regen" if existing else "ai_btn", lang), type="primary"):
+            try:
+                text = st.write_stream(ai.stream_report(api_key, context, lang, model))
+                ss.ai_text[analysis_key] = text if isinstance(text, str) else "".join(map(str, text))
+            except Exception as e:  # noqa: BLE001
+                st.error(ai_error_message(e, lang))
+        elif existing:
+            st.markdown(existing)
+
+# ---------------------------------------------------------------------------
+# Chat
+# ---------------------------------------------------------------------------
+with tabs[5]:
+    if not api_key:
+        st.warning(tr("ai_need_key", lang))
+    else:
+        history = ss.chat.setdefault(analysis_key, [])
+        chat_box = st.container(height=480)
+        for m in history:
+            chat_box.chat_message(m["role"]).markdown(m["content"])
+
+        suggestion = st.pills("💡", tr("chat_suggestions", lang), key=f"pill_{len(history)}",
+                              label_visibility="collapsed")
+        typed = st.chat_input(tr("chat_placeholder", lang))
+        question = typed or suggestion
+        if question:
+            history.append({"role": "user", "content": question})
+            chat_box.chat_message("user").markdown(question)
+            with chat_box.chat_message("assistant"):
                 try:
-                    if summary:
-                        data_summary = f"""
-                        Pre-calculated Billing Summary:
-                        - Identified Cloud Provider: {summary['cloud_provider']}
-                        - Total Spend: ${summary['total_spend']}
-                        - Top Costliest Services: {summary['top_services']}
-                        - Single Cost Spikes: {summary['spikes']}
-                        - Detected Cost Anomalies: {summary['anomalies']}
-                        - Programmatic FinOps Rule Flags: {rule_flags}
-                        
-                        Full Raw Data:
-                        {df.to_string()}
-                        """
-                    else:
-                        data_summary = df.to_string()
+                    answer = st.write_stream(ai.stream_chat(api_key, context, history[:-1], question, lang, model))
+                    history.append({"role": "assistant",
+                                    "content": answer if isinstance(answer, str) else "".join(map(str, answer))})
+                except Exception as e:  # noqa: BLE001
+                    history.pop()
+                    st.error(ai_error_message(e, lang))
+        if history and st.button(tr("chat_clear", lang)):
+            ss.chat[analysis_key] = []
+            st.rerun()
 
-                    client = genai.Client(api_key=api_key)
-                    
-                    # Goal 4: توجيه الـ Prompt لبناء خطة العمل وحساب التوفير
-                    prompt = f"""
-                    You are a Senior Cloud Financial Operations (FinOps) Specialist.
-                    Analyze the pre-processed cloud bill data, detected provider, and rule alerts below.
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+with tabs[6]:
+    st.caption(tr("exp_intro", lang))
+    ai_text = ss.ai_text.get(analysis_key)
+    exp = build_exports(f"{analysis_key}|{hash(ai_text)}", bill, s, a, lang, ai_text)
+    c = st.columns(4)
+    c[0].download_button(tr("exp_pdf", lang), exp["pdf"], "cloud_bill_audit.pdf", "application/pdf",
+                         width="stretch", type="primary")
+    c[1].download_button(tr("exp_xlsx", lang), exp["xlsx"], "cloud_bill_audit.xlsx",
+                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         width="stretch")
+    c[2].download_button(tr("exp_md", lang), exp["md"].encode("utf-8"), "cloud_bill_audit.md",
+                         "text/markdown", width="stretch")
+    lines_csv = (bill.df.drop(columns=["text"]).assign(estimated_savings=a.row_savings, rule=a.row_rule)
+                 .to_csv(index=False).encode("utf-8-sig"))
+    c[3].download_button(tr("exp_csv", lang), lines_csv, "line_items_with_savings.csv", "text/csv",
+                         width="stretch")
+    with st.expander("Markdown preview"):
+        st.markdown(exp["md"])
 
-                    Structure your output strictly in the language: {lang} with the following sections:
-                    1. Executive Summary & Provider Overview
-                    2. Estimated Savings & Potential ROI (Provide estimated $ or % savings based on anomalies/unused resources)
-                    3. Prioritized Step-by-Step Action Plan:
-                       - High Priority / Quick Wins (Immediate actions to stop waste)
-                       - Medium Priority (Optimization, commitment plans, rightsizing)
-                       - Long-term Governance Policies
-                    
-                    Data Summary & System Alerts:
-                    {data_summary}
-                    """
-                    
-                    response = client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=prompt
-                    )
-                    
-                    st.markdown(f"### {t['results_title']}")
-                    result_text = response.text
-                    st.write(result_text)
-                    
-                    pdf_bytes = generate_pdf_report(result_text)
-                    st.download_button(
-                        label=t["pdf_button"],
-                        data=pdf_bytes,
-                        file_name="Cloud_Bill_Audit_Report.pdf",
-                        mime="application/pdf"
-                    )
-                    
-                except Exception as e:
-                    if "503" in str(e):
-                        st.error(t["error_503"])
-                    else:
-                        st.error(f"Error: {e}")
-
-st.markdown("---")
-st.subheader(t["b2b_header"])
-st.write(t["b2b_text"])
-st.info(f"{t['b2b_contact']} support@cloudauditor.com")
+# ---------------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader(tr("b2b_header", lang))
+st.write(tr("b2b_text", lang))
+st.info(f"{tr('b2b_contact', lang)} support@cloudauditor.com")
